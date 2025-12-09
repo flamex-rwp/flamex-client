@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Unregister Service Worker</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .status {
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        button {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        button:hover {
+            background: #c82333;
+        }
+        .clear-btn {
+            background: #ffc107;
+        }
+        .clear-btn:hover {
+            background: #e0a800;
+        }
+    </style>
+</head>
+<body>
+    <h1>Service Worker Utility</h1>
+    <p>Use this page to unregister service workers and clear caches</p>
+
+    <button onclick="unregisterServiceWorker()">Unregister Service Worker</button>
+    <button class="clear-btn" onclick="clearAllCaches()">Clear All Caches</button>
+    <button class="clear-btn" onclick="clearLocalStorage()">Clear Local Storage</button>
+
+    <div id="status"></div>
+
+    <script>
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'status ' + type;
+            statusDiv.innerHTML = message;
+        }
+
+        async function unregisterServiceWorker() {
+            if ('serviceWorker' in navigator) {
+                try {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+
+                    if (registrations.length === 0) {
+                        showStatus('No service workers found.', 'info');
+                        return;
+                    }
+
+                    let count = 0;
+                    for (let registration of registrations) {
+                        await registration.unregister();
+                        count++;
+                    }
+
+                    showStatus(`Successfully unregistered ${count} service worker(s).<br>Please refresh the page.`, 'success');
+                } catch (error) {
+                    showStatus('Error: ' + error.message, 'info');
+                }
+            } else {
+                showStatus('Service workers are not supported in this browser.', 'info');
+            }
+        }
+
+        async function clearAllCaches() {
+            if ('caches' in window) {
+                try {
+                    const cacheNames = await caches.keys();
+
+                    if (cacheNames.length === 0) {
+                        showStatus('No caches found.', 'info');
+                        return;
+                    }
+
+                    await Promise.all(cacheNames.map(name => caches.delete(name)));
+                    showStatus(`Cleared ${cacheNames.length} cache(s): ${cacheNames.join(', ')}<br>Please refresh the page.`, 'success');
+                } catch (error) {
+                    showStatus('Error clearing caches: ' + error.message, 'info');
+                }
+            } else {
+                showStatus('Cache API not supported in this browser.', 'info');
+            }
+        }
+
+        function clearLocalStorage() {
+            try {
+                const count = localStorage.length;
+                localStorage.clear();
+                sessionStorage.clear();
+                showStatus(`Cleared ${count} items from local storage and session storage.<br>Please refresh the page.`, 'success');
+            } catch (error) {
+                showStatus('Error clearing storage: ' + error.message, 'info');
+            }
+        }
+
+        // Auto-check for service workers on load
+        window.addEventListener('load', async () => {
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                if (registrations.length > 0) {
+                    showStatus(`Found ${registrations.length} active service worker(s). Click the button above to unregister.`, 'info');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

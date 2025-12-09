@@ -1,0 +1,99 @@
+/* CSS Variables for Cherry Red Theme */
+:root {
+  --color-primary: #DC143C;
+  --color-primary-dark: #A0001A;
+  --color-primary-light: #FF6B6B;
+  --color-primary-alt: #C41E3A;
+  
+  --color-secondary: #2C3E50;
+  --color-secondary-light: #95A5A6;
+  --color-secondary-dark: #1A252F;
+  
+  --color-accent: #FFFFFF;
+  
+  --color-success: #48BB78;
+  --color-success-dark: #38A169;
+  --color-warning: #ED8936;
+  --color-warning-dark: #DD6B20;
+  --color-danger: #DC143C;
+  --color-danger-dark: #A0001A;
+  --color-info: #4299E1;
+  --color-info-dark: #3182CE;
+  
+  --color-text: #2D3748;
+  --color-text-light: #718096;
+  --color-text-muted: #A0AEC0;
+  --color-border: #E2E8F0;
+  --color-border-light: #F1F5F9;
+  --color-background: #F5F5F5;
+  --color-background-light: #FFFFFF;
+  
+  --gradient-primary: linear-gradient(135deg, #DC143C 0%, #A0001A 100%);
+  --gradient-secondary: linear-gradient(135deg, #95A5A6 0%, #2C3E50 100%);
+  --gradient-background: linear-gradient(135deg, #95A5A6 0%, #FFFFFF 100%);
+  
+  --shadow-sm: 0 2px 4px rgba(220, 20, 60, 0.1);
+  --shadow-md: 0 4px 15px rgba(220, 20, 60, 0.2);
+  --shadow-lg: 0 8px 25px rgba(220, 20, 60, 0.3);
+  --shadow-xl: 0 20px 40px rgba(220, 20, 60, 0.2);
+  --shadow-focus: 0 0 0 3px rgba(220, 20, 60, 0.2);
+  
+  --border-radius-sm: 8px;
+  --border-radius-md: 12px;
+  --border-radius-lg: 20px;
+  
+  --transition-fast: 0.2s ease;
+  --transition-normal: 0.3s ease;
+  --transition-slow: 0.5s ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+/* Accessibility: Focus indicators */
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Prevent zoom on input focus (iOS) */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="date"],
+input[type="time"],
+select,
+textarea {
+  font-size: 16px; /* Prevents zoom on iOS */
+}
+
+@media (max-width: 768px) {
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  input[type="password"],
+  input[type="date"],
+  input[type="time"],
+  select,
+  textarea {
+    min-height: 44px; /* Touch-friendly target size */
+  }
+}
