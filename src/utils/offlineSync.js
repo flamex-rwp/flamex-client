@@ -91,7 +91,7 @@ export const syncOfflineOrders = async () => {
           if (serverOrder) {
             await markOrderSynced(order.id, serverOrder);
           } else {
-            await markOrderSynced(order.id);
+          await markOrderSynced(order.id);
           }
           syncedCount++;
           console.log(`Order ${order.id} synced successfully`);

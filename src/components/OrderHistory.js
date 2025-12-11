@@ -348,6 +348,18 @@ const OrderHistory = () => {
       const calculatedTotal = subtotalAfterDiscount + deliveryCharge;
       const totalAmount = (Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
 
+      // Payment amounts (support partial payments/negatives)
+      const amountTaken = fullOrder.amount_taken !== undefined && fullOrder.amount_taken !== null
+        ? parseFloat(fullOrder.amount_taken)
+        : fullOrder.amountTaken !== undefined && fullOrder.amountTaken !== null
+          ? parseFloat(fullOrder.amountTaken)
+          : undefined;
+      const returnAmount = fullOrder.return_amount !== undefined && fullOrder.return_amount !== null
+        ? parseFloat(fullOrder.return_amount)
+        : fullOrder.returnAmount !== undefined && fullOrder.returnAmount !== null
+          ? parseFloat(fullOrder.returnAmount)
+          : (amountTaken !== undefined ? amountTaken - totalAmount : undefined);
+
       // Debug: Log API values to help identify if discount_percent is missing from API
       if (discountPercent > 0 || apiTotalAmount !== calculatedTotal) {
         console.log('[Receipt Debug] Order values from API:', {
@@ -392,8 +404,8 @@ const OrderHistory = () => {
         discountPercent: discountPercent,
         delivery_charge: deliveryCharge,
         payment_method: fullOrder.payment_method || order.payment_method || 'cash',
-        amount_taken: fullOrder.amount_taken ? parseFloat(fullOrder.amount_taken) : null,
-        return_amount: fullOrder.return_amount ? parseFloat(fullOrder.return_amount) : null,
+        amount_taken: amountTaken !== undefined ? amountTaken : null,
+        return_amount: returnAmount !== undefined ? returnAmount : null,
         payment_status: fullOrder.payment_status || order.payment_status || 'completed',
         order_type: fullOrder.order_type || order.order_type,
         special_instructions: fullOrder.special_instructions || order.special_instructions || null,

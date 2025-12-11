@@ -191,7 +191,7 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
           let startDate, endDate, filter;
           
           try {
-            const urlObj = new URL(url.startsWith('http') ? url : `http://localhost${url}`, window.location.origin);
+          const urlObj = new URL(url.startsWith('http') ? url : `http://localhost${url}`, window.location.origin);
             // Check both URL params and params object (params object takes precedence)
             startDate = params.start || params.startDate || urlObj.searchParams.get('start') || urlObj.searchParams.get('startDate');
             endDate = params.end || params.endDate || urlObj.searchParams.get('end') || urlObj.searchParams.get('endDate');

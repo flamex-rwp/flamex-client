@@ -365,6 +365,21 @@ const generateHTMLReceipt = (orderData, printStage) => {
   const apiTotalAmount = Number(total_amount) || 0;
   // Use API total_amount only if it matches our calculation (within 1 PKR tolerance), otherwise recalculate
   const total = (apiTotalAmount > 0 && Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
+  const hasCashInfo = payment_method === 'cash' && amount_taken !== undefined && amount_taken !== null;
+  const hasReturnAmount = return_amount !== undefined && return_amount !== null;
+  const apiReturnAmount = hasReturnAmount ? Number(return_amount) : null;
+  const calculatedChange = hasCashInfo ? ((Number(amount_taken) || 0) - total) : null;
+  const tolerance = 1; // 1 PKR tolerance for rounding
+  const useApiReturnAmount = apiReturnAmount !== null && calculatedChange !== null
+    ? Math.abs(apiReturnAmount - calculatedChange) <= tolerance
+    : false;
+  const effectiveReturnAmount = hasCashInfo
+    ? (useApiReturnAmount && apiReturnAmount !== null ? apiReturnAmount : (calculatedChange !== null ? calculatedChange : 0))
+    : null;
+  const hasReturnToShow = effectiveReturnAmount !== null;
+  const isReturnNegative = hasReturnToShow && effectiveReturnAmount < 0;
+  const returnLabel = isReturnNegative ? 'Amount Due:' : 'Change Return:';
+  const returnDisplayValue = hasReturnToShow ? Math.abs(effectiveReturnAmount) : 0;
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -509,7 +524,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
           </tr>
         </table>
         
-        ${payment_method === 'cash' && amount_taken && return_amount ? `
+        ${hasCashInfo && hasReturnToShow ? `
         <div class="spacer"></div>
         <table class="order-info">
           <tr>
@@ -517,8 +532,8 @@ const generateHTMLReceipt = (orderData, printStage) => {
             <td class="col-price">${formatCurrency(amount_taken)}</td>
           </tr>
           <tr>
-            <td class="col-item">Change Return:</td>
-            <td class="col-price">${formatCurrency(return_amount)}</td>
+            <td class="col-item">${returnLabel}</td>
+            <td class="col-price">${formatCurrency(returnDisplayValue)}</td>
           </tr>
         </table>
         ` : ''}
@@ -692,6 +707,21 @@ const Receipt = ({ orderData, printStage }) => {
   const apiTotalAmount = Number(total_amount) || 0;
   // Use API total_amount only if it matches our calculation (within 1 PKR tolerance), otherwise recalculate
   const total = (apiTotalAmount > 0 && Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
+  const hasCashInfo = payment_method === 'cash' && amount_taken !== undefined && amount_taken !== null;
+  const hasReturnAmount = return_amount !== undefined && return_amount !== null;
+  const apiReturnAmount = hasReturnAmount ? Number(return_amount) : null;
+  const calculatedChange = hasCashInfo ? ((Number(amount_taken) || 0) - total) : null;
+  const tolerance = 1; // 1 PKR tolerance for rounding
+  const useApiReturnAmount = apiReturnAmount !== null && calculatedChange !== null
+    ? Math.abs(apiReturnAmount - calculatedChange) <= tolerance
+    : false;
+  const effectiveReturnAmount = hasCashInfo
+    ? (useApiReturnAmount && apiReturnAmount !== null ? apiReturnAmount : (calculatedChange !== null ? calculatedChange : 0))
+    : null;
+  const hasReturnToShow = effectiveReturnAmount !== null;
+  const isReturnNegative = hasReturnToShow && effectiveReturnAmount < 0;
+  const returnLabel = isReturnNegative ? 'Amount Due:' : 'Change Return:';
+  const returnDisplayValue = hasReturnToShow ? Math.abs(effectiveReturnAmount) : 0;
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -981,7 +1011,7 @@ const Receipt = ({ orderData, printStage }) => {
           </tbody>
         </table>
 
-        {payment_method === 'cash' && amount_taken && return_amount && (
+        {hasCashInfo && hasReturnToShow && (
           <>
             <div style={{ height: '4px' }}></div>
             <table style={tableStyle}>
@@ -991,8 +1021,8 @@ const Receipt = ({ orderData, printStage }) => {
                   <td style={tdRightStyle}>{formatCurrency(amount_taken)}</td>
                 </tr>
                 <tr>
-                  <td style={tdLeftStyle}>Change Return:</td>
-                  <td style={tdRightStyle}>{formatCurrency(return_amount)}</td>
+                  <td style={tdLeftStyle}>{returnLabel}</td>
+                  <td style={tdRightStyle}>{formatCurrency(returnDisplayValue)}</td>
                 </tr>
               </tbody>
             </table>

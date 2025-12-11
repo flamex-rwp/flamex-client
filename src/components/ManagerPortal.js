@@ -1,9 +1,10 @@
-import React, { lazy, Suspense, useState, useRef, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useRef, useEffect, useCallback } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { authAPI } from '../services/api';
+import { authAPI, ordersAPI } from '../services/api';
 import './ManagerPortal.css';
 import OrderSystem from './OrderSystem';
 import { Spinner } from './LoadingSkeleton';
+import { getAllOrders } from '../utils/offlineDB';
 import { 
   FaShoppingCart, 
   FaUtensils, 
@@ -33,15 +34,17 @@ const CustomerManagement = lazy(() => import('./CustomerManagement'));
 
 // Lazy load heavy components
 
-function NavLink({ to, children }) {
+function NavLink({ to, children, badgeCount = 0, onClick }) {
   const location = useLocation();
   const isActive =
     location.pathname === to ||
     (to === '/manager/orders' && (location.pathname === '/manager' || location.pathname === '/manager/'));
+  const showBadge = Number(badgeCount) > 0;
 
   return (
-    <Link to={to} className={`nav-link ${isActive ? 'active' : ''}`}>
+    <Link to={to} onClick={onClick} className={`nav-link ${isActive ? 'active' : ''} ${showBadge ? 'has-badge' : ''}`}>
       {children}
+      {showBadge && <span className="nav-badge">{badgeCount}</span>}
     </Link>
   );
 }
@@ -53,6 +56,7 @@ const ManagerPortal = ({ user, onLogout }) => {
   const [showScroll, setShowScroll] = useState(false);
   const [atStart, setAtStart] = useState(true);
   const [atEnd, setAtEnd] = useState(false);
+  const [pendingBadges, setPendingBadges] = useState({ dineIn: 0, delivery: 0 });
 
   const handleLogout = async () => {
     try {
@@ -101,6 +105,74 @@ const ManagerPortal = ({ user, onLogout }) => {
     updateScrollState();
   }, [location.pathname]);
 
+  const fetchPendingBadges = useCallback(async () => {
+    let dineInCount = 0;
+    let deliveryCount = 0;
+
+    // Online stats (best effort)
+    try {
+      const dineRes = await ordersAPI.getDineInStats();
+      const dineData = dineRes.data?.data || dineRes.data || {};
+      dineInCount =
+        dineData.pendingOrders ??
+        dineData.pending_orders ??
+        dineData.pending_payments?.count ??
+        0;
+    } catch (err) {
+      console.warn('[ManagerPortal] Failed to fetch dine-in stats for badge:', err?.message || err);
+    }
+
+    try {
+      const delRes = await ordersAPI.getDeliveryStats();
+      const delData = delRes.data?.data || delRes.data || {};
+      deliveryCount =
+        delData.pending_deliveries?.count ??
+        delData.pendingDeliveries ??
+        delData.pending_orders ??
+        delData.pending_payments?.count ??
+        0;
+    } catch (err) {
+      console.warn('[ManagerPortal] Failed to fetch delivery stats for badge:', err?.message || err);
+    }
+
+    // Include offline pending orders (unsynced)
+    try {
+      const offlineOrders = await getAllOrders({ synced: false });
+      offlineOrders.forEach((order) => {
+        const orderTypeRaw = order.order_type || order.orderType;
+        const normalizedType = orderTypeRaw === 'delivery' ? 'delivery' : 'dine_in';
+        const orderStatus = order.orderStatus || order.order_status || order.status || 'pending';
+        const paymentStatus = order.paymentStatus || order.payment_status || 'pending';
+        const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+        const isCompleted =
+          orderStatus === 'completed' ||
+          paymentStatus === 'completed' ||
+          deliveryStatus === 'delivered';
+
+        if (!isCompleted) {
+          if (normalizedType === 'delivery') {
+            deliveryCount += 1;
+          } else {
+            dineInCount += 1;
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('[ManagerPortal] Failed to check offline pending orders for badge:', err?.message || err);
+    }
+
+    setPendingBadges({
+      dineIn: Number(dineInCount) || 0,
+      delivery: Number(deliveryCount) || 0,
+    });
+  }, []);
+
+  useEffect(() => {
+    fetchPendingBadges();
+    const interval = setInterval(fetchPendingBadges, 15000);
+    return () => clearInterval(interval);
+  }, [fetchPendingBadges]);
+
   return (
     <div className="manager-portal">
       <nav className="navbar">
@@ -126,10 +198,10 @@ const ManagerPortal = ({ user, onLogout }) => {
             <NavLink to="/manager/orders">
               <FaShoppingCart /> <span>Orders</span>
             </NavLink>
-            <NavLink to="/manager/dine-in-orders">
+            <NavLink to="/manager/dine-in-orders" badgeCount={pendingBadges.dineIn}>
               <FaUtensils /> <span>Dine-In</span>
             </NavLink>
-            <NavLink to="/manager/delivery-orders">
+            <NavLink to="/manager/delivery-orders" badgeCount={pendingBadges.delivery}>
               <FaTruck /> <span>Delivery</span>
             </NavLink>
             <NavLink to="/manager/delivery-reports">
@@ -191,10 +263,10 @@ const ManagerPortal = ({ user, onLogout }) => {
           <NavLink to="/manager/orders" onClick={() => setMobileMenuOpen(false)}>
             <FaShoppingCart /> <span>Orders</span>
           </NavLink>
-          <NavLink to="/manager/dine-in-orders" onClick={() => setMobileMenuOpen(false)}>
+          <NavLink to="/manager/dine-in-orders" badgeCount={pendingBadges.dineIn} onClick={() => setMobileMenuOpen(false)}>
             <FaUtensils /> <span>Dine-In Orders</span>
           </NavLink>
-          <NavLink to="/manager/delivery-orders" onClick={() => setMobileMenuOpen(false)}>
+          <NavLink to="/manager/delivery-orders" badgeCount={pendingBadges.delivery} onClick={() => setMobileMenuOpen(false)}>
             <FaTruck /> <span>Delivery Orders</span>
           </NavLink>
           <NavLink to="/manager/delivery-reports" onClick={() => setMobileMenuOpen(false)}>

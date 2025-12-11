@@ -32,7 +32,7 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
       console.error('[ConfirmationModal] Confirm handler error:', err);
     }
     if (onClose) {
-      onClose();
+    onClose();
     }
   };
 

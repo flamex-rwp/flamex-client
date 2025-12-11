@@ -174,8 +174,8 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       return;
     }
 
-    setDeletingId(addressId);
-    try {
+        setDeletingId(addressId);
+        try {
       const customerIdStr = String(customer.id ?? '');
       const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
 
@@ -205,7 +205,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         if (onAddressUpdate) onAddressUpdate();
       } else {
         console.log('[AddressModal] Online delete starting', { addressId, customerId: customer.id });
-        await customerAPI.deleteAddress(addressId);
+          await customerAPI.deleteAddress(addressId);
         console.log('[AddressModal] Online delete response success', { addressId });
 
         // Update local state immediately
@@ -225,20 +225,20 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         }
 
         // Reload to ensure fresh list from API
-        await loadAddresses();
+          await loadAddresses();
         console.log('[AddressModal] Reloaded addresses after delete');
-        showSuccess('Address deleted successfully');
-        if (onAddressUpdate) {
-          onAddressUpdate();
+          showSuccess('Address deleted successfully');
+          if (onAddressUpdate) {
+            onAddressUpdate();
         }
-      }
-    } catch (err) {
-      console.error('Failed to delete address:', err);
-      showError(err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
-    } finally {
-      setDeletingId(null);
-      setConfirmModal({ ...confirmModal, isOpen: false });
-    }
+          }
+        } catch (err) {
+          console.error('Failed to delete address:', err);
+          showError(err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
+        } finally {
+          setDeletingId(null);
+          setConfirmModal({ ...confirmModal, isOpen: false });
+        }
   };
 
   const handleSetDefault = async (addressId) => {

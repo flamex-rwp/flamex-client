@@ -628,7 +628,7 @@ const DineInOrders = () => {
       const totalAmount = parseFloat(updatedOrder?.total_amount || order.total_amount) || calculatedTotal;
       
       const returnAmount = paymentMethod === 'cash' && amountTaken
-        ? Math.max(0, parseFloat(amountTaken) - totalAmount)
+        ? parseFloat(amountTaken) - totalAmount
         : 0;
 
       // Prepare receipt data - ensure all required fields are present
