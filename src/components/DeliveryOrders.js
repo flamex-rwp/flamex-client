@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
@@ -6,7 +6,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { useToast } from '../contexts/ToastContext';
 import ConfirmationModal from './ConfirmationModal';
 import { getOfflineOrders, getOfflineOrdersCount, addPendingOperation, updateOfflineOrder, mergePreservedOfflineStatus } from '../utils/offlineDB';
-import { isOnline } from '../services/offlineSyncService';
+import { isOnline, syncPendingOperations } from '../services/offlineSyncService';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineIndicator from './OfflineIndicator';
 
@@ -75,6 +75,8 @@ const DeliveryOrders = () => {
     variant: 'danger'
   });
   const [offlineToastShown, setOfflineToastShown] = useState(false);
+  const hasInitialLoad = useRef(false);
+  const isUpdatingStatus = useRef(false);
 
   const fetchOrders = useCallback(async (tab = null) => {
     const targetTab = tab || activeTab;
@@ -353,11 +355,21 @@ const DeliveryOrders = () => {
     }
   }, [dateFilter, startDate, endDate, mergeStats]);
 
+  // Fetch data on component mount and when filters change
   useEffect(() => {
-    fetchOrders();
-    fetchStats();
-    fetchAllOrders();
-  }, [fetchOrders, fetchStats, fetchAllOrders]);
+    const loadData = async () => {
+      if (!hasInitialLoad.current) {
+        hasInitialLoad.current = true;
+      }
+      await Promise.all([
+        fetchOrders(),
+        fetchStats(),
+        fetchAllOrders()
+      ]);
+    };
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter, startDate, endDate, activeTab]); // Only depend on filter values, not callbacks
 
   // Show offline pending orders notice (PWA sync)
   useEffect(() => {
@@ -375,37 +387,56 @@ const DeliveryOrders = () => {
     checkOffline();
   }, [offlineToastShown, showError]);
 
-  // When coming back online, refresh to reflect synced offline changes
+  // When coming back online, sync offline orders first, then refresh from database
+  const prevOnlineRef = useRef(online);
   useEffect(() => {
-    if (online) {
-      // Small delay to allow sync to complete
-      const timer = setTimeout(() => {
-        fetchAllOrders();
-        fetchStats();
-      }, 2000);
+    // Only trigger if online status actually changed from false to true
+    if (online && !prevOnlineRef.current && hasInitialLoad.current && !isUpdatingStatus.current) {
+      const syncAndRefresh = async () => {
+        try {
+          // First, sync pending operations (offline orders and updates) to the database
+          console.log('[DeliveryOrders] Coming back online - syncing pending operations...');
+          const syncResult = await syncPendingOperations();
+          
+          // Only refresh orders from database if sync was successful (or no pending operations)
+          if (syncResult && (syncResult.synced > 0 || syncResult.failed === 0)) {
+            console.log('[DeliveryOrders] Sync completed successfully, refreshing orders from database...');
+            await Promise.all([
+              fetchAllOrders(),
+              fetchStats()
+            ]);
+          } else if (syncResult && syncResult.failed > 0) {
+            console.warn('[DeliveryOrders] Some operations failed to sync:', syncResult.errors);
+            // Still refresh to show current state, but log the errors
+            await Promise.all([
+              fetchAllOrders(),
+              fetchStats()
+            ]);
+          }
+        } catch (error) {
+          console.error('[DeliveryOrders] Error during sync/refresh:', error);
+          // Even if sync fails, try to refresh orders to show current state
+          try {
+            await Promise.all([
+              fetchAllOrders(),
+              fetchStats()
+            ]);
+          } catch (refreshError) {
+            console.error('[DeliveryOrders] Error refreshing orders:', refreshError);
+          }
+        }
+      };
+      
+      // Small delay to ensure network is stable
+      const timer = setTimeout(syncAndRefresh, 1000);
+      prevOnlineRef.current = online;
       return () => clearTimeout(timer);
     }
-  }, [online, fetchAllOrders, fetchStats]);
+    prevOnlineRef.current = online;
+  }, [online, fetchAllOrders, fetchStats]); // Include fetchAllOrders and fetchStats in deps
 
-  // Periodically refresh orders when online to catch synced changes
-  useEffect(() => {
-    if (!online) return;
-    
-    const interval = setInterval(() => {
-      fetchAllOrders();
-      fetchStats();
-    }, 10000); // Refresh every 10 seconds when online
-    
-    return () => clearInterval(interval);
-  }, [online, fetchAllOrders, fetchStats]);
-
-  // When coming back online, refresh to reflect synced offline changes
-  useEffect(() => {
-    if (online) {
-      fetchOrders();
-      fetchStats();
-    }
-  }, [online, fetchOrders, fetchStats]);
+  // Removed periodic refresh - only refresh on user actions or when coming back online
+  // This prevents bad UX from constant page reloading
 
   // Reset filter to 'today' when switching tabs
   useEffect(() => {
@@ -538,28 +569,57 @@ const DeliveryOrders = () => {
           offlineId: realOfflineId
         });
         
-        // Update local state immediately
-        setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
-        setCompletedOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+        // Update local state immediately and move to completed tab (no page refresh)
+        const updatedOrder = { ...order, ...updatedData };
+        setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+        setCompletedOrders(prev => {
+          const exists = prev.find(o => o.id === order.id);
+          return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+        });
         
         showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
         closePaymentModal();
         
-        // Refresh orders and stats
-        await Promise.all([
-          fetchAllOrders(),
-          fetchStats()
-        ]);
+        // Only refresh stats, not orders (already updated locally)
+        fetchStats();
+        
+        // Dispatch event to refresh badges immediately
+        window.dispatchEvent(new CustomEvent('orderUpdated', { 
+          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid', offline: true } 
+        }));
       } else {
         // Online mode
         await ordersAPI.markAsPaid(order.id, payload);
+        
+        // Update local state immediately and move to completed tab (no page refresh)
+        const updatedOrder = {
+          ...order,
+          payment_status: 'completed',
+          paymentStatus: 'completed',
+          order_status: 'completed',
+          orderStatus: 'completed',
+          delivery_status: 'delivered',
+          deliveryStatus: 'delivered',
+          payment_method: paymentMethod,
+          amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
+          return_amount: payload.returnAmount || 0
+        };
+        setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+        setCompletedOrders(prev => {
+          const exists = prev.find(o => o.id === order.id);
+          return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+        });
+        
         showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
         closePaymentModal();
 
-        await Promise.all([
-          fetchAllOrders(),
-          fetchStats()
-        ]);
+        // Only refresh stats, not orders (already updated locally)
+        fetchStats();
+        
+        // Dispatch event to refresh badges immediately
+        window.dispatchEvent(new CustomEvent('orderUpdated', { 
+          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid' } 
+        }));
       }
     } catch (err) {
       console.error('Failed to mark order as paid', err);
@@ -610,12 +670,18 @@ const DeliveryOrders = () => {
             offlineId: realOfflineId
           });
           
-          setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
-          setCompletedOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+          // Update local state immediately and move to completed tab (no page refresh)
+          const updatedOrder = { ...order, ...updatedData };
+          setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === order.id);
+            return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+          });
           
           showSuccess(`Order #${order.order_number || order.id} marked as paid offline. Changes will sync when connection is restored.`);
           closePaymentModal();
-          await Promise.all([fetchAllOrders(), fetchStats()]);
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (offlineErr) {
           showError('Failed to save offline. Please try again.');
         }
@@ -669,6 +735,7 @@ const DeliveryOrders = () => {
 
   const handleStatusUpdate = async (orderId, newStatus) => {
     setUpdatingStatusId(orderId);
+    isUpdatingStatus.current = true;
     try {
       // Ensure orderId is a string
       const orderIdStr = String(orderId || '');
@@ -677,6 +744,45 @@ const DeliveryOrders = () => {
       }
       
       const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId || o.id === orderIdStr);
+      
+      // Update local state immediately for better UX (no page refresh)
+      const updateLocalState = () => {
+        const isDelivered = newStatus === 'delivered';
+        const updatedOrder = {
+          ...targetOrder,
+          orderStatus: isDelivered ? 'completed' : newStatus,
+          order_status: isDelivered ? 'completed' : newStatus,
+          deliveryStatus: ['out_for_delivery', 'delivered'].includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status),
+          delivery_status: ['out_for_delivery', 'delivered'].includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status)
+        };
+        
+        // Move order between tabs if needed
+        const shouldBeCompleted = isDelivered || (newStatus === 'completed');
+        const isCurrentlyPending = activeTab === 'pending';
+        
+        if (shouldBeCompleted && isCurrentlyPending) {
+          // Move from pending to completed
+          setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+        } else if (!shouldBeCompleted && !isCurrentlyPending) {
+          // Move from completed to pending
+          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setPendingOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+        } else {
+          // Update in current tab
+          if (activeTab === 'pending') {
+            setPendingOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+          } else {
+            setCompletedOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+          }
+        }
+      };
       
       // If offline, save to pending operations queue
       if (!isOnline()) {
@@ -729,9 +835,10 @@ const DeliveryOrders = () => {
           });
         }
         
+        updateLocalState();
         showSuccess(`Status update saved offline. It will sync when you are back online.`);
-        await fetchAllOrders();
         setUpdatingStatusId(null);
+        isUpdatingStatus.current = false;
         return;
       }
       
@@ -743,8 +850,8 @@ const DeliveryOrders = () => {
           delivery_status: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
           deliveryStatus: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined)
         });
+        updateLocalState();
         showSuccess(`Offline order status updated to ${newStatus.replace(/_/g, ' ')}`);
-        await fetchAllOrders();
       } else {
         try {
           if (['out_for_delivery', 'delivered'].includes(newStatus)) {
@@ -759,12 +866,19 @@ const DeliveryOrders = () => {
             await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
           }
 
+          updateLocalState();
           showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}`);
-          await Promise.all([
-            fetchAllOrders(),
-            fetchStats()
-          ]);
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (error) {
+          // Revert local state on error
+          const revertOrder = { ...targetOrder };
+          if (activeTab === 'pending') {
+            setPendingOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+          } else {
+            setCompletedOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+          }
+          
           // If API fails, save to pending operations
           if (!error.response) {
             const realOrderId = orderIdStr.startsWith('OFFLINE-') 
@@ -794,8 +908,8 @@ const DeliveryOrders = () => {
                 data: { order_status: newStatus }
               });
             }
+            updateLocalState();
             showSuccess(`Status update saved offline. It will sync when connection is restored.`);
-            await fetchAllOrders();
           } else {
             throw error;
           }
@@ -806,6 +920,7 @@ const DeliveryOrders = () => {
       showError(err.response?.data?.error || 'Failed to update order status');
     } finally {
       setUpdatingStatusId(null);
+      isUpdatingStatus.current = false;
     }
   };
 
@@ -817,15 +932,30 @@ const DeliveryOrders = () => {
       onConfirm: async () => {
         setCancellingOrderId(orderId);
         try {
+          const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
+          
+          // Update local state immediately (no page refresh)
+          const updatedOrder = {
+            ...targetOrder,
+            order_status: 'cancelled',
+            orderStatus: 'cancelled',
+            status: 'cancelled'
+          };
+          
+          // Remove from both lists
+          setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          
           await ordersAPI.cancelOrder(orderId);
           showSuccess('Order cancelled successfully');
-          await Promise.all([
-            fetchAllOrders(),
-            fetchStats()
-          ]);
+          
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (err) {
           console.error('Failed to cancel order', err);
           showError(err.response?.data?.error || 'Failed to cancel order');
+          // Revert local state on error
+          await fetchAllOrders();
         } finally {
           setCancellingOrderId(null);
         }
@@ -843,15 +973,34 @@ const DeliveryOrders = () => {
       onConfirm: async () => {
         setMarkingPaidId(orderId);
         try {
+          const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
+          
           await ordersAPI.revertPaymentStatus(orderId);
+          
+          // Update local state immediately (no page refresh)
+          const updatedOrder = {
+            ...targetOrder,
+            payment_status: 'pending',
+            paymentStatus: 'pending',
+            amount_taken: null,
+            return_amount: null
+          };
+          
+          // Move from completed to pending tab if needed
+          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setPendingOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+          
           showSuccess('Payment status reverted to pending successfully');
-          await Promise.all([
-            fetchAllOrders(),
-            fetchStats()
-          ]);
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (err) {
           console.error('Failed to revert payment status', err);
           showError(err.response?.data?.error || 'Failed to revert payment status');
+          // Revert local state on error
+          await fetchAllOrders();
         } finally {
           setMarkingPaidId(null);
         }

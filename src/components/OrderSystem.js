@@ -356,17 +356,29 @@ const OrderSystem = () => {
 
   const phoneIsValid = (phone) => {
     if (!phone) return false;
-    // Accept formats: 03001234567, 3001234567, 92 300 1234567, +92 300 1234567
-    const phoneRegex = /^(?:\+?92|0|92)?(3\d{2})(?:\D?)(\d{7})$/;
-    return phoneRegex.test(phone.trim().replace(/\s+/g, ''));
+    // Remove spaces and non-digits for validation
+    const cleaned = phone.trim().replace(/\s+/g, '').replace(/[^0-9]/g, '');
+    // Pakistani phone numbers: 11 digits starting with 0, or 10 digits starting with 3
+    // Maximum 11 digits as per backend validation
+    if (cleaned.length < 10 || cleaned.length > 11) return false;
+    // Must start with 0 or 3
+    return /^[03]/.test(cleaned);
   };
 
   const validateDeliveryFields = () => {
     if (!deliveryName.trim()) {
       return 'Delivery customer name is required.';
     }
-    if (!deliveryPhone.trim() || !phoneIsValid(deliveryPhone)) {
-      return 'Enter a valid phone number (03XX-XXXXXXX or +92...).';
+    if (!deliveryPhone.trim()) {
+      return 'Phone number is required.';
+    }
+    // Check length first
+    const cleanedPhone = deliveryPhone.trim().replace(/\s+/g, '').replace(/[^0-9]/g, '');
+    if (cleanedPhone.length > 11) {
+      return 'Phone number must be maximum 11 digits (e.g., 03001234567).';
+    }
+    if (!phoneIsValid(deliveryPhone)) {
+      return 'Enter a valid phone number (10-11 digits starting with 0 or 3, e.g., 03001234567).';
     }
     if (!deliveryAddress.trim()) {
       return 'Delivery address is required.';
@@ -1125,6 +1137,11 @@ const OrderSystem = () => {
             orderId = response.data.data?.id;
             orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
             showSuccess(`Order #${orderNumber || orderId} created successfully!`);
+            
+            // Dispatch event to refresh badges immediately
+            window.dispatchEvent(new CustomEvent('orderCreated', { 
+              detail: { orderType: orderType, orderId, orderNumber } 
+            }));
           } catch (error) {
             console.warn('Failed to create order online, saving offline:', error);
             const savedOrder = await saveOfflineOrder(orderData);
@@ -1132,6 +1149,11 @@ const OrderSystem = () => {
             orderNumber = null;
             isOffline = true;
             showInfo('Order saved offline. It will sync when you are back online.');
+            
+            // Dispatch event for offline orders too
+            window.dispatchEvent(new CustomEvent('orderCreated', { 
+              detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
+            }));
           }
         } else {
           const savedOrder = await saveOfflineOrder(orderData);
@@ -1139,6 +1161,11 @@ const OrderSystem = () => {
           orderNumber = null;
           isOffline = true;
           showInfo('Order saved offline. It will sync when you are back online.');
+          
+          // Dispatch event for offline orders
+          window.dispatchEvent(new CustomEvent('orderCreated', { 
+            detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
+          }));
         }
       }
 

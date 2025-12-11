@@ -4,11 +4,6 @@
   "description": "Point of Sale system for Flamex restaurant with offline support",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
-    },
-    {
       "src": "logo192.png",
       "type": "image/png",
       "sizes": "192x192",
@@ -19,6 +14,24 @@
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any maskable"
+    },
+    {
+      "src": "logo64.png",
+      "type": "image/png",
+      "sizes": "64x64",
+      "purpose": "any"
+    },
+    {
+      "src": "logo32.png",
+      "type": "image/png",
+      "sizes": "32x32",
+      "purpose": "any"
+    },
+    {
+      "src": "logo16.png",
+      "type": "image/png",
+      "sizes": "16x16",
+      "purpose": "any"
     }
   ],
   "start_url": ".",

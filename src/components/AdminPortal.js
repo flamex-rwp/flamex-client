@@ -70,6 +70,7 @@ const AdminPortal = ({ user, onLogout }) => {
     image_url: '',
     available: 1
   });
+  const [imageUrlError, setImageUrlError] = useState('');
 
   // Confirmation Modal States
   const [confirmModal, setConfirmModal] = useState({
@@ -320,6 +321,30 @@ const AdminPortal = ({ user, onLogout }) => {
   const handleMenuSubmit = async (e) => {
     e.preventDefault();
     try {
+      // Prevent submission if there's an image URL error
+      if (imageUrlError) {
+        showError(`Cannot submit: ${imageUrlError}`);
+        return;
+      }
+
+      // Validate image URL if provided
+      if (menuForm.image_url && menuForm.image_url.trim() !== '') {
+        try {
+          // Validate URL format
+          const url = new URL(menuForm.image_url.trim());
+          // Check if it's http or https
+          if (!['http:', 'https:'].includes(url.protocol)) {
+            setImageUrlError('URL must start with http:// or https://');
+            showError('Invalid Image URL: URL must start with http:// or https://');
+            return;
+          }
+        } catch (urlError) {
+          setImageUrlError('Invalid URL format. Please enter a valid URL (e.g., https://example.com/image.jpg)');
+          showError('Invalid Image URL: Please provide a valid URL format (e.g., https://example.com/image.jpg)');
+          return;
+        }
+      }
+
       // Transform field names to match backend schema (camelCase)
       const payload = {
         name: menuForm.name,
@@ -340,10 +365,50 @@ const AdminPortal = ({ user, onLogout }) => {
       setShowMenuModal(false);
       setEditingMenuItem(null);
       setMenuForm({ name: '', category_id: '', price: '', description: '', image_url: '', available: 1 });
+      setImageUrlError('');
       fetchMenuItems();
     } catch (err) {
       console.error('Menu item error:', err.response?.data);
-      showError('Error: ' + (err.response?.data?.error || err.message));
+      
+      // Extract detailed error message from response
+      let errorMessage = 'Error: ' + (err.response?.data?.error || err.response?.data?.message || err.message);
+      
+      // Check if it's a validation error with specific field errors
+      if (err.response?.status === 400) {
+        const errorData = err.response?.data;
+        
+        // Check for field-specific errors array (from Zod validation)
+        if (errorData?.errors && Array.isArray(errorData.errors) && errorData.errors.length > 0) {
+          // Find imageUrl/image_url specific error
+          const imageError = errorData.errors.find(e => 
+            (e.field && (e.field.includes('imageUrl') || e.field.includes('image_url'))) ||
+            (e.message && (e.message.toLowerCase().includes('image') || e.message.toLowerCase().includes('url')))
+          );
+          
+          if (imageError) {
+            errorMessage = `Invalid Image URL: ${imageError.message || 'Please provide a valid image link (e.g., https://example.com/image.jpg)'}`;
+          } else {
+            // Show all validation errors
+            const fieldErrors = errorData.errors
+              .map(e => {
+                const fieldName = e.field ? e.field.replace(/body\./g, '').replace(/\./g, ' ') : '';
+                return fieldName ? `${fieldName}: ${e.message || e}` : (e.message || String(e));
+              })
+              .filter(Boolean)
+              .join(', ');
+            errorMessage = `Validation Error: ${fieldErrors}`;
+          }
+        }
+        // Check for single error message mentioning image
+        else if (errorData?.error || errorData?.message) {
+          const errorText = (errorData.error || errorData.message || '').toLowerCase();
+          if (errorText.includes('image') || errorText.includes('imageurl') || errorText.includes('image_url') || errorText.includes('url')) {
+            errorMessage = 'Invalid Image URL: Please provide a valid image link (e.g., https://example.com/image.jpg)';
+          }
+        }
+      }
+      
+      showError(errorMessage);
     }
   };
 
@@ -855,6 +920,7 @@ const AdminPortal = ({ user, onLogout }) => {
                 onClick={() => {
                   setEditingMenuItem(null);
                   setMenuForm({ name: '', category_id: '', price: '', description: '', image_url: '', available: 1 });
+                  setImageUrlError('');
                   setShowMenuModal(true);
                 }}
               >
@@ -927,6 +993,7 @@ const AdminPortal = ({ user, onLogout }) => {
                             image_url: item.imageUrl || item.image_url || '',  // Handle both formats
                             available: item.available === 1 || item.available === true ? 1 : 0
                           });
+                          setImageUrlError(''); // Clear any previous errors
                           setShowMenuModal(true);
                         }}>Edit</button>
                         <button className="btn-delete" onClick={() => handleDeleteMenuItem(item.id)}>Delete</button>
@@ -1137,10 +1204,45 @@ const AdminPortal = ({ user, onLogout }) => {
                 <input
                   type="text"
                   value={menuForm.image_url}
-                  onChange={(e) => setMenuForm({ ...menuForm, image_url: e.target.value })}
+                  onChange={(e) => {
+                    const urlValue = e.target.value;
+                    setMenuForm({ ...menuForm, image_url: urlValue });
+                    
+                    // Validate URL format in real-time
+                    if (urlValue && urlValue.trim() !== '') {
+                      try {
+                        const url = new URL(urlValue.trim());
+                        if (!['http:', 'https:'].includes(url.protocol)) {
+                          setImageUrlError('URL must start with http:// or https://');
+                        } else {
+                          setImageUrlError('');
+                        }
+                      } catch {
+                        setImageUrlError('Invalid URL format. Please enter a valid URL (e.g., https://example.com/image.jpg)');
+                      }
+                    } else {
+                      setImageUrlError('');
+                    }
+                  }}
                   placeholder="https://example.com/image.jpg"
+                  style={{
+                    borderColor: imageUrlError ? '#dc3545' : undefined
+                  }}
                 />
-                {menuForm.image_url && (
+                {imageUrlError && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    background: '#fff5f5',
+                    border: '1px solid #ffc9c9',
+                    borderRadius: '6px',
+                    color: '#c92a2a',
+                    fontSize: '0.875rem'
+                  }}>
+                    ⚠️ {imageUrlError}
+                  </div>
+                )}
+                {menuForm.image_url && !imageUrlError && (
                   <div style={{
                     marginTop: '0.5rem',
                     width: '100%',
@@ -1163,7 +1265,14 @@ const AdminPortal = ({ user, onLogout }) => {
                       }}
                       onError={(e) => {
                         e.target.style.display = 'none';
-                        e.target.parentElement.innerHTML = '<div style="color: #6c757d; padding: 1rem;">Invalid image URL</div>';
+                        e.target.parentElement.innerHTML = '<div style="color: #dc3545; padding: 1rem; font-weight: 600;">⚠️ Image failed to load. URL may be invalid or image not accessible.</div>';
+                        setImageUrlError('Image failed to load. Please verify the URL is correct and accessible.');
+                      }}
+                      onLoad={() => {
+                        // Clear any previous error when image loads successfully
+                        if (imageUrlError && imageUrlError.includes('failed to load')) {
+                          setImageUrlError('');
+                        }
                       }}
                     />
                   </div>

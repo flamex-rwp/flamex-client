@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
@@ -7,7 +7,7 @@ import { useToast } from '../contexts/ToastContext';
 import ConfirmationModal from './ConfirmationModal';
 import { printReceipt } from './Receipt';
 import { getOfflineOrders, getOfflineOrdersCount, updateOfflineOrder, addPendingOperation } from '../utils/offlineDB';
-import { isOnline } from '../services/offlineSyncService';
+import { isOnline, syncPendingOperations } from '../services/offlineSyncService';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineIndicator from './OfflineIndicator';
 
@@ -25,7 +25,7 @@ const DineInOrders = () => {
   const [activeTab, setActiveTab] = useState('pending'); // 'pending' or 'completed'
   const [pendingOrders, setPendingOrders] = useState([]);
   const [completedOrders, setCompletedOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // Start as false, will be set to true when actually loading
   const [error, setError] = useState('');
   const [dateFilter, setDateFilter] = useState('today'); // 'today', 'yesterday', 'this_week', 'this_month', or 'custom'
   const [startDate, setStartDate] = useState(null);
@@ -58,6 +58,10 @@ const DineInOrders = () => {
   });
   const [offlineToastShown, setOfflineToastShown] = useState(false);
   const { online } = useOffline();
+  const hasInitialLoad = useRef(false);
+  const isUpdatingStatus = useRef(false);
+  const isLoadingRef = useRef(false); // Track if currently loading to prevent concurrent loads
+  const loadAttemptedRef = useRef(false); // Track if we've attempted to load (prevents double load in StrictMode)
 
   // Default stats and merge helper to prevent undefined accesses
   const defaultStats = useMemo(() => ({
@@ -143,8 +147,11 @@ const DineInOrders = () => {
           const orderData = offlineOrder.data || offlineOrder;
           // Only include dine-in orders (not delivery)
           if (orderData.order_type === 'dine_in' || orderData.orderType === 'dine_in' || !orderData.order_type) {
-            // Use a unique negative ID for offline orders to avoid conflicts with API orders
-            const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
+            // Use the existing ID if it already starts with OFFLINE-, otherwise create a unique ID
+            const existingId = offlineOrder.id || '';
+            const uniqueOfflineId = (typeof existingId === 'string' && existingId.startsWith('OFFLINE-'))
+              ? existingId
+              : `OFFLINE-${existingId || index}-${offlineOrder.timestamp || Date.now()}`;
             return {
               ...orderData,
               id: uniqueOfflineId, // Unique ID for offline orders
@@ -204,9 +211,20 @@ const DineInOrders = () => {
 
   // Fetch both pending and completed orders (for counts)
   const fetchAllOrders = useCallback(async (showLoading = true) => {
+    // Prevent concurrent calls - but allow initial load
+    if (isLoadingRef.current && hasInitialLoad.current) {
+      // Skip if already loading and we've already done initial load
+      console.log('[fetchAllOrders] Skipping - already loading');
+      return;
+    }
+    
+    // Set loading state BEFORE checking anything else
     if (showLoading) {
+      isLoadingRef.current = true;
       setLoading(true);
     }
+    
+    console.log('[fetchAllOrders] Starting fetch, showLoading:', showLoading);
     try {
       const params = { filter: dateFilter };
       if (startDate && endDate) {
@@ -255,7 +273,11 @@ const DineInOrders = () => {
           const orderData = offlineOrder.data || offlineOrder;
           // Only include dine-in orders
           if (orderData.order_type === 'dine_in' || orderData.orderType === 'dine_in' || !orderData.order_type) {
-            const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
+            // Use the existing ID if it already starts with OFFLINE-, otherwise create a unique ID
+            const existingId = offlineOrder.id || '';
+            const uniqueOfflineId = (typeof existingId === 'string' && existingId.startsWith('OFFLINE-'))
+              ? existingId
+              : `OFFLINE-${existingId || index}-${offlineOrder.timestamp || Date.now()}`;
             
             // Determine order status - check multiple fields and prioritize completed status
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
@@ -331,26 +353,98 @@ const DineInOrders = () => {
 
       setPendingOrders(allPendingOrders);
       setCompletedOrders(allCompletedOrders);
+      console.log('[fetchAllOrders] Successfully loaded orders');
     } catch (err) {
-      console.error('Failed to load all orders', err);
+      console.error('[fetchAllOrders] Failed to load all orders', err);
       setError('Failed to load orders');
     } finally {
+      // Always clear loading state and ref, regardless of showLoading flag
+      console.log('[fetchAllOrders] Clearing loading state');
+      isLoadingRef.current = false;
       if (showLoading) {
         setLoading(false);
       }
     }
   }, [dateFilter, startDate, endDate]);
 
-  // Fetch data on component mount and when filters change
+  // Initial load - only once (handles React StrictMode double mount)
   useEffect(() => {
+    // Prevent double loading in React StrictMode
+    if (loadAttemptedRef.current) {
+      console.log('[Initial Load] Skipping - already attempted');
+      // If we're skipping due to StrictMode remount, ensure loading is cleared
+      setLoading(false);
+      isLoadingRef.current = false;
+      return;
+    }
+    
+    console.log('[Initial Load] Starting initial load');
+    loadAttemptedRef.current = true;
+    
     const loadData = async () => {
-      await Promise.all([
-        fetchAllOrders(),
-        fetchStats()
-      ]);
+      try {
+        console.log('[Initial Load] Calling fetchAllOrders and fetchStats');
+        await Promise.all([
+          fetchAllOrders(true),
+          fetchStats()
+        ]);
+        console.log('[Initial Load] Completed successfully');
+        hasInitialLoad.current = true;
+      } catch (err) {
+        console.error('[Initial Load] Failed:', err);
+        setError('Failed to load orders');
+      } finally {
+        console.log('[Initial Load] Clearing loading state');
+        // Ensure loading is always cleared
+        isLoadingRef.current = false;
+        setLoading(false);
+      }
     };
     loadData();
-  }, [fetchAllOrders, fetchStats]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps - only run on mount
+
+  // Reload data when filters change (but not on initial mount)
+  // Use a ref to track previous filter values to prevent unnecessary reloads
+  const prevFiltersRef = useRef({ dateFilter: null, startDate: null, endDate: null });
+  const isInitialMountRef = useRef(true);
+  
+  useEffect(() => {
+    // Skip on initial mount (handled by the initial load useEffect)
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      // Initialize prevFiltersRef with current values
+      prevFiltersRef.current = { dateFilter, startDate, endDate };
+      return;
+    }
+    
+    if (!hasInitialLoad.current || isLoadingRef.current) return; // Skip if initial load hasn't happened yet or already loading
+    
+    // Check if filters actually changed
+    const filtersChanged = 
+      prevFiltersRef.current.dateFilter !== dateFilter ||
+      prevFiltersRef.current.startDate !== startDate ||
+      prevFiltersRef.current.endDate !== endDate;
+    
+    if (!filtersChanged) return;
+    
+    // Update previous filter values
+    prevFiltersRef.current = { dateFilter, startDate, endDate };
+    
+    const loadData = async () => {
+      isLoadingRef.current = true;
+      try {
+        await Promise.all([
+          fetchAllOrders(),
+          fetchStats()
+        ]);
+      } finally {
+        isLoadingRef.current = false;
+      }
+    };
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter, startDate, endDate]); // Reload when filters change
 
   // Show offline pending orders notice (PWA sync)
   useEffect(() => {
@@ -369,37 +463,79 @@ const DineInOrders = () => {
     checkOffline();
   }, [offlineToastShown, showError]);
 
-  // When coming back online, refresh to reflect synced offline changes
+  // When coming back online, sync offline orders first, then refresh from database
+  const prevOnlineRef = useRef(online);
   useEffect(() => {
-    if (online) {
-      // Small delay to allow sync to complete
-      const timer = setTimeout(() => {
-        fetchAllOrders();
-        fetchStats();
-      }, 2000);
+    // Only trigger if online status actually changed from false to true
+    if (online && !prevOnlineRef.current && hasInitialLoad.current && !isUpdatingStatus.current && !isLoadingRef.current) {
+      const syncAndRefresh = async () => {
+        try {
+          // First, sync pending operations (offline orders and updates) to the database
+          console.log('[DineInOrders] Coming back online - syncing pending operations...');
+          const syncResult = await syncPendingOperations();
+          
+          // Only refresh orders from database if sync was successful (or no pending operations)
+          if (syncResult && (syncResult.synced > 0 || syncResult.failed === 0)) {
+            console.log('[DineInOrders] Sync completed successfully, refreshing orders from database...');
+            if (!isLoadingRef.current) {
+              isLoadingRef.current = true;
+              await Promise.all([
+                fetchAllOrders(false), // Don't show loading state
+                fetchStats()
+              ]);
+              isLoadingRef.current = false;
+            }
+          } else if (syncResult && syncResult.failed > 0) {
+            console.warn('[DineInOrders] Some operations failed to sync:', syncResult.errors);
+            // Still refresh to show current state, but log the errors
+            if (!isLoadingRef.current) {
+              isLoadingRef.current = true;
+              await Promise.all([
+                fetchAllOrders(false),
+                fetchStats()
+              ]);
+              isLoadingRef.current = false;
+            }
+          }
+        } catch (error) {
+          console.error('[DineInOrders] Error during sync/refresh:', error);
+          // Even if sync fails, try to refresh orders to show current state
+          if (!isLoadingRef.current) {
+            isLoadingRef.current = true;
+            try {
+              await Promise.all([
+                fetchAllOrders(false),
+                fetchStats()
+              ]);
+            } finally {
+              isLoadingRef.current = false;
+            }
+          }
+        }
+      };
+      
+      // Small delay to ensure network is stable
+      const timer = setTimeout(syncAndRefresh, 1000);
+      prevOnlineRef.current = online;
       return () => clearTimeout(timer);
     }
-  }, [online, fetchAllOrders, fetchStats]);
+    prevOnlineRef.current = online;
+  }, [online, fetchAllOrders, fetchStats]); // Include fetchAllOrders and fetchStats in deps
 
-  // Periodically refresh orders when online to catch synced changes
-  // Use a longer interval (30 seconds) and don't show loading state for background refreshes
-  useEffect(() => {
-    if (!online) return;
-    
-    const interval = setInterval(() => {
-      fetchAllOrders(false); // Don't show loading state for background refresh
-      fetchStats();
-    }, 30000); // Refresh every 30 seconds when online (reduced frequency)
-    
-    return () => clearInterval(interval);
-  }, [online, fetchAllOrders, fetchStats]);
+  // Removed periodic refresh - only refresh on user actions or when coming back online
+  // This prevents bad UX from constant page reloading
 
-  // Reset filter to 'today' when switching tabs
+  // Reset filter to 'today' when switching tabs (but not on initial mount)
+  const prevActiveTabRef = useRef(null);
   useEffect(() => {
-    setDateFilter('today');
-    setStartDate(null);
-    setEndDate(null);
-    setShowCustomRange(false);
+    // Only reset if activeTab actually changed (not on initial mount)
+    if (prevActiveTabRef.current !== null && prevActiveTabRef.current !== activeTab) {
+      setDateFilter('today');
+      setStartDate(null);
+      setEndDate(null);
+      setShowCustomRange(false);
+    }
+    prevActiveTabRef.current = activeTab;
   }, [activeTab]);
 
   const handleDateFilterChange = (start, end) => {
@@ -658,33 +794,37 @@ const DineInOrders = () => {
       // Print customer receipt using JavaScript-controlled printing
       printReceipt(receiptDataForPrint, 'customer');
 
+      // Update local state immediately so UI reflects payment completion (no page refresh)
+      const updatedLocal = {
+        ...order,
+        payment_status: 'completed',
+        paymentStatus: 'completed',
+        order_status: 'completed',
+        orderStatus: 'completed',
+        offlineStatusUpdated: true,
+        payment_method: paymentMethod,
+        amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
+        return_amount: payload.returnAmount || 0
+      };
+      
+      // Move order from pending to completed tab
+      setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+      setCompletedOrders(prev => {
+        const exists = prev.find(o => o.id === order.id);
+        return exists ? prev.map(o => o.id === order.id ? updatedLocal : o) : [...prev, updatedLocal];
+      });
+      
       // Show appropriate success message based on online/offline status
       const isOfflineOrder = order.offline;
-        if (isOfflineOrder) {
-          // Update local state immediately so UI reflects payment completion while offline
-          const updatedLocal = {
-            payment_status: 'completed',
-            paymentStatus: 'completed',
-            order_status: 'completed',
-            orderStatus: 'completed',
-            offlineStatusUpdated: true,
-            payment_method: paymentMethod,
-            amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
-            return_amount: payload.returnAmount || 0
-          };
-          setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedLocal } : o));
-          setCompletedOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedLocal } : o));
-          showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
-        } else {
-          showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
-        }
-        closePaymentModal();
+      if (isOfflineOrder) {
+        showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
+      } else {
+        showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
+      }
+      closePaymentModal();
 
-        // Refresh both order lists and stats (uses cache when offline)
-        await Promise.all([
-          fetchAllOrders(),
-          fetchStats()
-        ]);
+      // Only refresh stats, not orders (already updated locally)
+      fetchStats();
     } catch (err) {
       console.error('Failed to mark order as paid', err);
       showError(err.response?.data?.error || 'Failed to mark order as paid');
@@ -726,8 +866,19 @@ const DineInOrders = () => {
   // Handle status update
   const handleStatusUpdate = async (orderId, newStatus) => {
     setUpdatingStatusId(orderId);
+    isUpdatingStatus.current = true;
     try {
       const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
+      
+      // Update local state immediately for better UX (no page refresh)
+      const updateLocalState = () => {
+        const updatedOrder = { ...targetOrder, orderStatus: newStatus, order_status: newStatus };
+        if (activeTab === 'pending') {
+          setPendingOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+        } else {
+          setCompletedOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+        }
+      };
       
       // If offline, save to pending operations queue
       if (!isOnline()) {
@@ -752,9 +903,10 @@ const DineInOrders = () => {
           });
         }
         
+        updateLocalState();
         showSuccess(`Status update saved offline. It will sync when you are back online.`);
-        await fetchAllOrders();
         setUpdatingStatusId(null);
+        isUpdatingStatus.current = false;
         return;
       }
       
@@ -765,18 +917,29 @@ const DineInOrders = () => {
             orderStatus: newStatus,
             offlineStatusUpdated: true // Mark that status was updated offline
           });
+        updateLocalState();
         showSuccess(`Offline order status updated to ${newStatus}`);
-        await fetchAllOrders();
       } else {
         try {
           await ordersAPI.updateOrderStatus(orderId, newStatus);
+          updateLocalState();
           showSuccess(`Order status updated to ${newStatus}`);
-          // Refresh orders and stats
-          await Promise.all([
-            fetchAllOrders(),
-            fetchStats()
-          ]);
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
+          
+          // Dispatch event to refresh badges immediately
+          window.dispatchEvent(new CustomEvent('orderUpdated', { 
+            detail: { orderType: 'dine_in', orderId, newStatus } 
+          }));
         } catch (error) {
+          // Revert local state on error
+          const revertOrder = { ...targetOrder };
+          if (activeTab === 'pending') {
+            setPendingOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+          } else {
+            setCompletedOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+          }
+          
           // If API fails, save to pending operations
           if (!error.response) {
             await addPendingOperation({
@@ -785,8 +948,8 @@ const DineInOrders = () => {
               method: 'PUT',
               data: { order_status: newStatus }
             });
+            updateLocalState();
             showSuccess(`Status update saved offline. It will sync when connection is restored.`);
-            await fetchAllOrders();
           } else {
             throw error;
           }
@@ -797,6 +960,7 @@ const DineInOrders = () => {
       showError(err.response?.data?.error || 'Failed to update order status');
     } finally {
       setUpdatingStatusId(null);
+      isUpdatingStatus.current = false;
     }
   };
 
@@ -810,6 +974,19 @@ const DineInOrders = () => {
         setCancellingOrderId(orderId);
         try {
           const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
+          
+          // Update local state immediately (no page refresh)
+          const updatedOrder = {
+            ...targetOrder,
+            order_status: 'cancelled',
+            orderStatus: 'cancelled',
+            status: 'cancelled'
+          };
+          
+          // Remove from both lists
+          setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          
           if (targetOrder?.offline) {
             await updateOfflineOrder(targetOrder.offlineId || orderId, {
               order_status: 'cancelled',
@@ -817,19 +994,23 @@ const DineInOrders = () => {
               status: 'cancelled'
             });
             showSuccess('Offline order cancelled locally');
-            await fetchAllOrders();
           } else {
             await ordersAPI.cancelOrder(orderId);
             showSuccess('Order cancelled successfully');
-            // Refresh both order lists and stats
-            await Promise.all([
-              fetchAllOrders(),
-              fetchStats()
-            ]);
           }
+          
+          // Dispatch event to refresh badges immediately
+          window.dispatchEvent(new CustomEvent('orderUpdated', {
+            detail: { orderType: 'dine_in', orderId, action: 'cancelled' }
+          }));
+          
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (err) {
           console.error('Failed to cancel order', err);
           showError(err.response?.data?.error || 'Failed to cancel order');
+          // Revert local state on error
+          await fetchAllOrders();
         } finally {
           setCancellingOrderId(null);
         }
@@ -847,20 +1028,40 @@ const DineInOrders = () => {
       onConfirm: async () => {
         setMarkingPaidId(orderId);
         try {
+          const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
+          
           await ordersAPI.update(orderId, {
             paymentStatus: 'pending',
             amountTaken: null,
             returnAmount: null
           });
+          
+          // Update local state immediately (no page refresh)
+          const updatedOrder = {
+            ...targetOrder,
+            payment_status: 'pending',
+            paymentStatus: 'pending',
+            order_status: 'pending',
+            orderStatus: 'pending',
+            amount_taken: null,
+            return_amount: null
+          };
+          
+          // Move from completed to pending tab
+          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setPendingOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+          
           showSuccess('Payment status reverted to pending successfully');
-          // Refresh both order lists and stats
-          await Promise.all([
-            fetchAllOrders(),
-            fetchStats()
-          ]);
+          // Only refresh stats, not orders (already updated locally)
+          fetchStats();
         } catch (err) {
           console.error('Failed to revert payment status', err);
           showError(err.response?.data?.error || 'Failed to revert payment status');
+          // Revert local state on error
+          await fetchAllOrders();
         } finally {
           setMarkingPaidId(null);
         }

@@ -1287,19 +1287,32 @@ const OrderHistory = () => {
 
                     {/* Status Badges */}
                     <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                      {(order.order_status || order.orderStatus) && (
-                        <div style={{
-                          padding: '0.25rem 0.75rem',
-                          borderRadius: '20px',
-                          background: getOrderStatusColor(order.order_status || order.orderStatus).background,
-                          color: getOrderStatusColor(order.order_status || order.orderStatus).color,
-                          fontSize: '0.8rem',
-                          fontWeight: '600',
-                          textTransform: 'capitalize'
-                        }}>
-                          Order: {(order.order_status || order.orderStatus).replace(/_/g, ' ')}
-                        </div>
-                      )}
+                      {(() => {
+                        // For dine-in orders: if payment is completed, show order status as completed
+                        // For delivery orders: show actual order_status
+                        const orderType = order.order_type || order.orderType;
+                        const paymentStatus = order.payment_status || order.paymentStatus;
+                        let displayOrderStatus = order.order_status || order.orderStatus;
+                        
+                        // If payment is completed and order is dine-in, ensure status shows as completed
+                        if (orderType === 'dine_in' && paymentStatus === 'completed') {
+                          displayOrderStatus = 'completed';
+                        }
+                        
+                        return displayOrderStatus ? (
+                          <div style={{
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '20px',
+                            background: getOrderStatusColor(displayOrderStatus).background,
+                            color: getOrderStatusColor(displayOrderStatus).color,
+                            fontSize: '0.8rem',
+                            fontWeight: '600',
+                            textTransform: 'capitalize'
+                          }}>
+                            Order: {displayOrderStatus.replace(/_/g, ' ')}
+                          </div>
+                        ) : null;
+                      })()}
                       {(order.delivery_status || order.deliveryStatus) && (
                         <div style={{
                           padding: '0.25rem 0.75rem',

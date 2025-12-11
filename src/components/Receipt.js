@@ -140,6 +140,9 @@ export const printReceipt = (orderData, printStage) => {
           line-height: 1.1 !important;
           vertical-align: top !important;
           box-sizing: border-box !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
+          hyphens: auto !important;
         }
         
         .col-item {
@@ -148,9 +151,11 @@ export const printReceipt = (orderData, printStage) => {
           text-align: left !important;
           padding-left: 0 !important;
           padding-right: 1px !important;
-          overflow: hidden !important;
-          text-overflow: ellipsis !important;
-          white-space: nowrap !important;
+          overflow: visible !important;
+          text-overflow: clip !important;
+          white-space: normal !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
           box-sizing: border-box !important;
         }
         
@@ -168,7 +173,9 @@ export const printReceipt = (orderData, printStage) => {
           width: 15% !important; /* Adjusted */
           max-width: 15% !important;
           text-align: center !important;
-          white-space: nowrap !important;
+          white-space: normal !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
           padding-left: 1px !important;
           padding-right: 1px !important;
           box-sizing: border-box !important;
@@ -180,7 +187,9 @@ export const printReceipt = (orderData, printStage) => {
           text-align: right !important;
           padding-left: 1px !important;
           padding-right: 0 !important;
-          white-space: nowrap !important;
+          white-space: normal !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
           overflow: visible !important;
           box-sizing: border-box !important;
         }
@@ -822,9 +831,11 @@ const Receipt = ({ orderData, printStage }) => {
     textAlign: 'left',
     width: '55%',
     maxWidth: '55%',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    overflow: 'visible',
+    textOverflow: 'clip',
+    whiteSpace: 'normal',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
     boxSizing: 'border-box',
     color: '#000000'
   };
@@ -837,7 +848,9 @@ const Receipt = ({ orderData, printStage }) => {
     textAlign: 'center',
     width: '15%',
     maxWidth: '15%',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
     boxSizing: 'border-box',
     color: '#000000'
   };
@@ -851,7 +864,9 @@ const Receipt = ({ orderData, printStage }) => {
     width: '30%',
     maxWidth: '30%',
     overflow: 'visible',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
     boxSizing: 'border-box',
     color: '#000000'
   };

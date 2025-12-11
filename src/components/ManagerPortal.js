@@ -170,7 +170,24 @@ const ManagerPortal = ({ user, onLogout }) => {
   useEffect(() => {
     fetchPendingBadges();
     const interval = setInterval(fetchPendingBadges, 15000);
-    return () => clearInterval(interval);
+    
+    // Listen for order creation/update events to refresh badges immediately
+    const handleOrderCreated = (event) => {
+      console.log('[ManagerPortal] Order event received, refreshing badges', event.detail);
+      // Small delay to ensure order is saved/processed
+      setTimeout(() => {
+        fetchPendingBadges();
+      }, 500);
+    };
+    
+    window.addEventListener('orderCreated', handleOrderCreated);
+    window.addEventListener('orderUpdated', handleOrderCreated);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('orderCreated', handleOrderCreated);
+      window.removeEventListener('orderUpdated', handleOrderCreated);
+    };
   }, [fetchPendingBadges]);
 
   return (
