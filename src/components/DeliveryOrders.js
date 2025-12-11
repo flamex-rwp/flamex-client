@@ -5,8 +5,10 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useToast } from '../contexts/ToastContext';
 import ConfirmationModal from './ConfirmationModal';
-import { getOfflineOrders } from '../utils/offlineDB';
-import { getOfflineOrdersCount } from '../utils/offlineDB';
+import { getOfflineOrders, getOfflineOrdersCount, addPendingOperation, updateOfflineOrder, mergePreservedOfflineStatus } from '../utils/offlineDB';
+import { isOnline } from '../services/offlineSyncService';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineIndicator from './OfflineIndicator';
 
 dayjs.extend(relativeTime);
 
@@ -31,6 +33,7 @@ const DeliveryOrders = () => {
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [updatingStatusId, setUpdatingStatusId] = useState(null);
   const [cancellingOrderId, setCancellingOrderId] = useState(null);
+  const { online } = useOffline();
   const defaultStats = {
     pending_payments: { count: 0, total_amount: 0 },
     received_payments: { count: 0, total_amount: 0 },
@@ -88,48 +91,85 @@ const DeliveryOrders = () => {
         params.end = endDate;
       }
 
-      // Fetch API orders
+      // Fetch API orders - ONLY when online
+      // When offline, don't fetch API orders (even cached ones) - only show orders created offline
       let apiOrders = [];
-      try {
-        const response = await ordersAPI.getDeliveryOrders(params);
-        apiOrders = response.data.data || [];
-      } catch (err) {
-        console.warn('Failed to load delivery orders from API, using offline only:', err);
+      if (online) {
+        try {
+          const response = await ordersAPI.getDeliveryOrders(params);
+          apiOrders = response.data.data || [];
+          
+          // Merge preserved offline status from IndexedDB into API orders
+          // This ensures that orders with offline status updates don't revert to pending
+          apiOrders = await mergePreservedOfflineStatus(apiOrders);
+        } catch (err) {
+          // Silently handle API errors in offline mode
+        }
       }
 
-      // Fetch offline orders
       const offlineOrdersData = await getOfflineOrders();
+      
       const offlineOrders = offlineOrdersData
         .filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
-          // Only include delivery orders
-          if (orderData.order_type === 'delivery' || orderData.orderType === 'delivery') {
+          const isDelivery = orderData.order_type === 'delivery' || orderData.orderType === 'delivery';
+          
+          if (isDelivery) {
             const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
+            
+            const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
+            const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
+            const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
+            const isCompleted = orderStatus === 'completed' || paymentStatus === 'completed';
+            
             return {
               ...orderData,
               id: uniqueOfflineId,
               offlineId: offlineOrder.id,
               order_number: orderData.order_number || orderData.orderNumber || null,
-              orderStatus: orderData.orderStatus || orderData.order_status || 'pending',
-              paymentStatus: orderData.paymentStatus || orderData.payment_status || 'pending',
-              status: orderData.status || 'pending',
+              orderStatus: isCompleted ? 'completed' : orderStatus,
+              paymentStatus: paymentStatus,
+              deliveryStatus: deliveryStatus,
+              delivery_status: deliveryStatus,
+              status: isCompleted ? 'completed' : orderStatus,
               offline: true,
               createdAt: orderData.created_at || orderData.createdAt || offlineOrder.timestamp,
               synced: false,
               items: orderData.items || orderData.orderItems || [],
-              orderItems: orderData.orderItems || orderData.items || []
+              orderItems: orderData.orderItems || orderData.items || [],
+              offlineStatusUpdated: orderData.offlineStatusUpdated || false
             };
           }
           return null;
         })
         .filter(Boolean);
 
+      // Filter offline orders by target tab (pending or completed)
+      // For delivery orders, also check deliveryStatus - if 'delivered', it should be in completed tab
+      const filteredOfflineOrders = offlineOrders.filter(offlineOrder => {
+        const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
+        const paymentStatus = offlineOrder.paymentStatus || offlineOrder.payment_status || 'pending';
+        const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
+        
+        // Order is completed if:
+        // 1. orderStatus is 'completed', OR
+        // 2. paymentStatus is 'completed', OR
+        // 3. deliveryStatus is 'delivered' (for delivery orders)
+        const isCompleted = orderStatus === 'completed' || 
+                           paymentStatus === 'completed' ||
+                           deliveryStatus === 'delivered';
+        
+        const matchesTab = targetTab === 'pending' ? !isCompleted : isCompleted;
+        return matchesTab;
+      });
+      
+
       // Merge API and offline orders, remove duplicates
       const allOrders = [...apiOrders];
       const apiOrderNumbers = new Set(apiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
       
-      offlineOrders.forEach(offlineOrder => {
+      filteredOfflineOrders.forEach(offlineOrder => {
         const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
         const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
         
@@ -145,8 +185,6 @@ const DeliveryOrders = () => {
         return dateB - dateA;
       });
 
-      console.log('✅ Delivery orders fetched:', apiOrders.length, 'API orders,', offlineOrders.length, 'offline orders for', targetTab);
-
       if (targetTab === 'pending') {
         setPendingOrders(allOrders);
       } else {
@@ -158,7 +196,7 @@ const DeliveryOrders = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, dateFilter, startDate, endDate]);
+  }, [activeTab, dateFilter, startDate, endDate, online]);
 
   // Fetch both pending and completed orders (for counts)
   const fetchAllOrders = useCallback(async () => {
@@ -169,18 +207,36 @@ const DeliveryOrders = () => {
         params.end = endDate;
       }
 
-      // Fetch API orders in parallel
+      // Fetch API orders in parallel - ONLY when online
+      // When offline, don't fetch API orders (even cached ones) - only show orders created offline
       let pendingApiOrders = [];
       let completedApiOrders = [];
-      try {
-        const [pendingResponse, completedResponse] = await Promise.all([
-          ordersAPI.getDeliveryOrders({ ...params, status: 'pending' }),
-          ordersAPI.getDeliveryOrders({ ...params, status: 'completed' })
-        ]);
-        pendingApiOrders = pendingResponse.data.data || [];
-        completedApiOrders = completedResponse.data.data || [];
-      } catch (err) {
-        console.warn('Failed to load orders from API, using offline only:', err);
+      if (online) {
+        try {
+          const [pendingResponse, completedResponse] = await Promise.all([
+            ordersAPI.getDeliveryOrders({ ...params, status: 'pending' }),
+            ordersAPI.getDeliveryOrders({ ...params, status: 'completed' })
+          ]);
+          pendingApiOrders = pendingResponse.data.data || [];
+          completedApiOrders = completedResponse.data.data || [];
+          
+          // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
+          // For delivery orders, also ensure delivery_status is 'delivered' when order is completed
+          const normalizeOrderStatus = (order) => {
+            // Keep server statuses as-is for delivery; do not auto-complete on payment
+            return { ...order };
+          };
+          
+          pendingApiOrders = pendingApiOrders.map(normalizeOrderStatus);
+          completedApiOrders = completedApiOrders.map(normalizeOrderStatus);
+          
+          // Merge preserved offline status from IndexedDB into API orders
+          // This ensures that orders with offline status updates don't revert to pending
+          pendingApiOrders = await mergePreservedOfflineStatus(pendingApiOrders);
+          completedApiOrders = await mergePreservedOfflineStatus(completedApiOrders);
+        } catch (err) {
+          // Silently handle API errors in offline mode
+        }
       }
 
       // Fetch offline orders
@@ -192,51 +248,90 @@ const DeliveryOrders = () => {
           // Only include delivery orders
           if (orderData.order_type === 'delivery' || orderData.orderType === 'delivery') {
             const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
+            
+            // Determine order status - check multiple fields and preserve actual status
+            const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
+            const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
+            // For delivery orders, default deliveryStatus to 'pending' if not set
+            const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
+            
+            // Only mark as completed if orderStatus is actually 'completed' or delivery is delivered
+            const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+            
             return {
               ...orderData,
               id: uniqueOfflineId,
               offlineId: offlineOrder.id,
               order_number: orderData.order_number || orderData.orderNumber || null,
-              orderStatus: orderData.orderStatus || orderData.order_status || 'pending',
-              paymentStatus: orderData.paymentStatus || orderData.payment_status || 'pending',
-              status: orderData.status || 'pending',
+              orderStatus: isCompleted ? 'completed' : orderStatus, // Preserve actual status, only override if truly completed
+              paymentStatus: paymentStatus,
+              deliveryStatus: deliveryStatus, // Always set delivery status (defaults to 'pending' if not set)
+              delivery_status: deliveryStatus,
+              status: isCompleted ? 'completed' : orderStatus,
               offline: true,
               createdAt: orderData.created_at || orderData.createdAt || offlineOrder.timestamp,
               synced: false,
               items: orderData.items || orderData.orderItems || [],
-              orderItems: orderData.orderItems || orderData.items || []
+              orderItems: orderData.orderItems || orderData.items || [],
+              offlineStatusUpdated: orderData.offlineStatusUpdated || false
             };
           }
           return null;
         })
         .filter(Boolean);
 
-      // Merge offline orders with pending API orders
-      const allPendingOrders = [...pendingApiOrders];
-      const apiOrderNumbers = new Set(pendingApiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
+      // Separate offline orders into pending and completed
+      const offlinePendingOrders = [];
+      const offlineCompletedOrders = [];
+      const apiOrderNumbers = new Set([
+        ...pendingApiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean),
+        ...completedApiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean)
+      ]);
       
       offlineOrders.forEach(offlineOrder => {
         const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
         const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
         
         if (!exists) {
-          allPendingOrders.push(offlineOrder);
+          // Check if order is completed based on status
+          // For delivery orders, also check deliveryStatus - if 'delivered', it should be in completed
+          const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
+          const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
+          
+          // Don't mark as completed just because paymentStatus is completed; delivery must be completed or explicitly set
+          const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+          
+          if (isCompleted) {
+            offlineCompletedOrders.push(offlineOrder);
+          } else {
+            offlinePendingOrders.push(offlineOrder);
+          }
         }
       });
 
-      // Sort by creation date
+      // Merge API and offline orders
+      const allPendingOrders = [...pendingApiOrders, ...offlinePendingOrders];
+      const allCompletedOrders = [...completedApiOrders, ...offlineCompletedOrders];
+
+      // Sort by creation date (newest first)
       allPendingOrders.sort((a, b) => {
+        const dateA = new Date(a.createdAt || a.created_at || 0);
+        const dateB = new Date(b.createdAt || b.created_at || 0);
+        return dateB - dateA;
+      });
+      
+      allCompletedOrders.sort((a, b) => {
         const dateA = new Date(a.createdAt || a.created_at || 0);
         const dateB = new Date(b.createdAt || b.created_at || 0);
         return dateB - dateA;
       });
 
       setPendingOrders(allPendingOrders);
-      setCompletedOrders(completedApiOrders);
+      setCompletedOrders(allCompletedOrders);
     } catch (err) {
       console.error('Failed to load all orders', err);
     }
-  }, [dateFilter, startDate, endDate]);
+  }, [dateFilter, startDate, endDate, online]);
 
   // Fetch statistics
   const fetchStats = useCallback(async () => {
@@ -275,11 +370,42 @@ const DeliveryOrders = () => {
           setOfflineToastShown(true);
         }
       } catch (err) {
-        console.warn('Failed to check offline orders count', err);
       }
     };
     checkOffline();
   }, [offlineToastShown, showError]);
+
+  // When coming back online, refresh to reflect synced offline changes
+  useEffect(() => {
+    if (online) {
+      // Small delay to allow sync to complete
+      const timer = setTimeout(() => {
+        fetchAllOrders();
+        fetchStats();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [online, fetchAllOrders, fetchStats]);
+
+  // Periodically refresh orders when online to catch synced changes
+  useEffect(() => {
+    if (!online) return;
+    
+    const interval = setInterval(() => {
+      fetchAllOrders();
+      fetchStats();
+    }, 10000); // Refresh every 10 seconds when online
+    
+    return () => clearInterval(interval);
+  }, [online, fetchAllOrders, fetchStats]);
+
+  // When coming back online, refresh to reflect synced offline changes
+  useEffect(() => {
+    if (online) {
+      fetchOrders();
+      fetchStats();
+    }
+  }, [online, fetchOrders, fetchStats]);
 
   // Reset filter to 'today' when switching tabs
   useEffect(() => {
@@ -344,29 +470,158 @@ const DeliveryOrders = () => {
     }
 
     setMarkingPaidId(order.id);
+    
+    // Build payload outside try block so it's accessible in catch block
+    const payload = {
+      paymentMethod: paymentMethod
+    };
+
+    if (paymentMethod === 'cash') {
+      const taken = parseFloat(amountTaken);
+      payload.amountTaken = taken;
+      payload.returnAmount = Math.max(0, taken - parseFloat(order.total_amount));
+    }
+    
     try {
-      const payload = {
-        paymentMethod: paymentMethod
-      };
+      // Check if offline
+      if (!isOnline() || order.offline) {
+        // Extract the real offline ID (IndexedDB ID) for updating
+        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-') 
+          ? order.id.replace(/^OFFLINE-/, '').split('-')[0] 
+          : order.id);
+        
+        const updatedData = {
+          payment_method: paymentMethod,
+          paymentMethod,
+          amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
+          return_amount: payload.returnAmount || 0,
+          payment_status: 'completed',
+          paymentStatus: 'completed',
+          order_status: 'completed',
+          orderStatus: 'completed',
+          // For delivery orders, also set delivery_status to 'delivered' when marked as paid
+          delivery_status: 'delivered',
+          deliveryStatus: 'delivered',
+          offlineStatusUpdated: true
+        };
+        
+        // Update the order in IndexedDB with completed status
+        try {
+          await updateOfflineOrder(realOfflineId, updatedData);
+        } catch (updateError) {
+          // Silently handle update errors
+        }
+        
+        // Queue operations for sync - use the real offline ID
+        await addPendingOperation({
+          type: 'mark_as_paid',
+          endpoint: `/api/orders/${realOfflineId}/mark-as-paid`,
+          method: 'POST',
+          data: payload,
+          offlineId: realOfflineId
+        });
+        
+        await addPendingOperation({
+          type: 'update_order_status',
+          endpoint: `/api/orders/${realOfflineId}/status`,
+          method: 'PUT',
+          data: { order_status: 'completed' },
+          offlineId: realOfflineId
+        });
+        
+        // Also queue delivery status update for delivery orders
+        await addPendingOperation({
+          type: 'update_delivery_status',
+          endpoint: `/api/orders/${realOfflineId}/delivery/status`,
+          method: 'PUT',
+          data: { deliveryStatus: 'delivered' },
+          offlineId: realOfflineId
+        });
+        
+        // Update local state immediately
+        setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+        setCompletedOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+        
+        showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
+        closePaymentModal();
+        
+        // Refresh orders and stats
+        await Promise.all([
+          fetchAllOrders(),
+          fetchStats()
+        ]);
+      } else {
+        // Online mode
+        await ordersAPI.markAsPaid(order.id, payload);
+        showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
+        closePaymentModal();
 
-      if (paymentMethod === 'cash') {
-        const taken = parseFloat(amountTaken);
-        payload.amountTaken = taken;
-        payload.returnAmount = Math.max(0, taken - parseFloat(order.total_amount));
+        await Promise.all([
+          fetchAllOrders(),
+          fetchStats()
+        ]);
       }
-
-      await ordersAPI.markAsPaid(order.id, payload);
-
-      showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
-      closePaymentModal();
-
-      await Promise.all([
-        fetchAllOrders(),
-        fetchStats()
-      ]);
     } catch (err) {
       console.error('Failed to mark order as paid', err);
-      showError(err.response?.data?.error || 'Failed to mark order as paid');
+      // If online but API fails, fall back to offline mode
+      if (err.code === 'ERR_NETWORK' || !isOnline()) {
+        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-') 
+          ? order.id.replace(/^OFFLINE-/, '').split('-')[0] 
+          : order.id);
+        
+        const updatedData = {
+          payment_method: paymentMethod,
+          paymentMethod,
+          amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
+          return_amount: payload.returnAmount || 0,
+          payment_status: 'completed',
+          paymentStatus: 'completed',
+          order_status: 'completed',
+          orderStatus: 'completed',
+          // For delivery orders, also set delivery_status to 'delivered' when marked as paid
+          delivery_status: 'delivered',
+          deliveryStatus: 'delivered',
+          offlineStatusUpdated: true
+        };
+        
+        try {
+          await updateOfflineOrder(realOfflineId, updatedData);
+          await addPendingOperation({
+            type: 'mark_as_paid',
+            endpoint: `/api/orders/${realOfflineId}/mark-as-paid`,
+            method: 'POST',
+            data: payload,
+            offlineId: realOfflineId
+          });
+          await addPendingOperation({
+            type: 'update_order_status',
+            endpoint: `/api/orders/${realOfflineId}/status`,
+            method: 'PUT',
+            data: { order_status: 'completed' },
+            offlineId: realOfflineId
+          });
+          
+          // Also queue delivery status update for delivery orders
+          await addPendingOperation({
+            type: 'update_delivery_status',
+            endpoint: `/api/orders/${realOfflineId}/delivery/status`,
+            method: 'PUT',
+            data: { deliveryStatus: 'delivered' },
+            offlineId: realOfflineId
+          });
+          
+          setPendingOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+          setCompletedOrders(prev => prev.map(o => o.id === order.id ? { ...o, ...updatedData } : o));
+          
+          showSuccess(`Order #${order.order_number || order.id} marked as paid offline. Changes will sync when connection is restored.`);
+          closePaymentModal();
+          await Promise.all([fetchAllOrders(), fetchStats()]);
+        } catch (offlineErr) {
+          showError('Failed to save offline. Please try again.');
+        }
+      } else {
+        showError(err.response?.data?.error || 'Failed to mark order as paid');
+      }
     } finally {
       setMarkingPaidId(null);
     }
@@ -415,23 +670,137 @@ const DeliveryOrders = () => {
   const handleStatusUpdate = async (orderId, newStatus) => {
     setUpdatingStatusId(orderId);
     try {
-      if (['out_for_delivery', 'delivered'].includes(newStatus)) {
-        await ordersAPI.updateDeliveryStatus(orderId, newStatus);
-
-        // If delivered, also mark order as completed to remove from pending list
-        if (newStatus === 'delivered') {
-          await ordersAPI.updateOrderStatus(orderId, 'completed');
-        }
-      } else {
-        // pending, preparing
-        await ordersAPI.updateOrderStatus(orderId, newStatus);
+      // Ensure orderId is a string
+      const orderIdStr = String(orderId || '');
+      if (!orderIdStr) {
+        throw new Error('Invalid order ID');
       }
+      
+      const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId || o.id === orderIdStr);
+      
+      // If offline, save to pending operations queue
+      if (!isOnline()) {
+        // Extract real order ID (remove OFFLINE- prefix if present)
+        const realOrderId = orderIdStr.startsWith('OFFLINE-') 
+          ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
+          : orderIdStr;
+        
+        // Handle delivery status updates
+        // CRITICAL: Use the offlineId from the target order to ensure we can find it during sync
+        const offlineIdForSync = targetOrder?.offlineId || realOrderId;
+        
+        if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+          await addPendingOperation({
+            type: 'update_delivery_status',
+            endpoint: `/api/orders/${realOrderId}/delivery/status`,
+            method: 'PUT',
+            data: { deliveryStatus: newStatus },
+            offlineId: offlineIdForSync // Store offlineId for sync matching
+          });
+          
+          // If delivered, also mark order as completed
+          if (newStatus === 'delivered') {
+            await addPendingOperation({
+              type: 'update_order_status',
+              endpoint: `/api/orders/${realOrderId}/status`,
+              method: 'PUT',
+              data: { order_status: 'completed' },
+              offlineId: offlineIdForSync // Store offlineId for sync matching
+            });
+          }
+        } else {
+          await addPendingOperation({
+            type: 'update_order_status',
+            endpoint: `/api/orders/${realOrderId}/status`,
+            method: 'PUT',
+            data: { order_status: newStatus },
+            offlineId: offlineIdForSync // Store offlineId for sync matching
+          });
+        }
+        
+        // Also update local offline order if it exists - CRITICAL: Update with offlineId
+        if (targetOrder?.offline) {
+          await updateOfflineOrder(offlineIdForSync, {
+            order_status: newStatus === 'delivered' ? 'completed' : newStatus,
+            orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
+            delivery_status: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
+            deliveryStatus: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
+            offlineStatusUpdated: true
+          });
+        }
+        
+        showSuccess(`Status update saved offline. It will sync when you are back online.`);
+        await fetchAllOrders();
+        setUpdatingStatusId(null);
+        return;
+      }
+      
+      // Online: try API first
+      if (targetOrder?.offline) {
+        await updateOfflineOrder(targetOrder.offlineId || orderIdStr, {
+          order_status: newStatus === 'delivered' ? 'completed' : newStatus,
+          orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
+          delivery_status: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
+          deliveryStatus: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined)
+        });
+        showSuccess(`Offline order status updated to ${newStatus.replace(/_/g, ' ')}`);
+        await fetchAllOrders();
+      } else {
+        try {
+          if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+            await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
 
-      showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}`);
-      await Promise.all([
-        fetchAllOrders(),
-        fetchStats()
-      ]);
+            // If delivered, also mark order as completed to remove from pending list
+            if (newStatus === 'delivered') {
+              await ordersAPI.updateOrderStatus(orderIdStr, 'completed');
+            }
+          } else {
+            // pending, preparing
+            await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
+          }
+
+          showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}`);
+          await Promise.all([
+            fetchAllOrders(),
+            fetchStats()
+          ]);
+        } catch (error) {
+          // If API fails, save to pending operations
+          if (!error.response) {
+            const realOrderId = orderIdStr.startsWith('OFFLINE-') 
+              ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
+              : orderIdStr;
+            
+            if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+              await addPendingOperation({
+                type: 'update_delivery_status',
+                endpoint: `/api/orders/${realOrderId}/delivery/status`,
+                method: 'PUT',
+                data: { deliveryStatus: newStatus }
+              });
+              if (newStatus === 'delivered') {
+                await addPendingOperation({
+                  type: 'update_order_status',
+                  endpoint: `/api/orders/${realOrderId}/status`,
+                  method: 'PUT',
+                  data: { order_status: 'completed' }
+                });
+              }
+            } else {
+              await addPendingOperation({
+                type: 'update_order_status',
+                endpoint: `/api/orders/${realOrderId}/status`,
+                method: 'PUT',
+                data: { order_status: newStatus }
+              });
+            }
+            showSuccess(`Status update saved offline. It will sync when connection is restored.`);
+            await fetchAllOrders();
+          } else {
+            throw error;
+          }
+        }
+      }
     } catch (err) {
       console.error('Failed to update order status', err);
       showError(err.response?.data?.error || 'Failed to update order status');
@@ -492,10 +861,12 @@ const DeliveryOrders = () => {
   };
 
   const currentOrders = activeTab === 'pending' ? pendingOrders : completedOrders;
-  const safeStats = stats || defaultStats;
+  // Ensure safeStats always has proper structure
+  const safeStats = mergeStats(stats || {});
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
+      <OfflineIndicator />
       <div style={{ marginBottom: '2rem' }}>
         <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold' }}>🚚 Delivery Orders</h1>
 
@@ -1062,16 +1433,16 @@ const DeliveryOrders = () => {
                         return order.orderStatus || order.order_status || 'pending';
                       })()}
                       onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
-                      disabled={updatingStatusId === order.id || order.offline}
+                      disabled={updatingStatusId === order.id}
                       style={{
                         flex: 1,
                         padding: '0.5rem',
                         border: '2px solid #e2e8f0',
                         borderRadius: '6px',
-                        background: order.offline ? '#f8f9fa' : 'white',
-                        color: order.offline ? '#adb5bd' : '#495057',
+                        background: 'white',
+                        color: '#495057',
                         fontWeight: '600',
-                        cursor: (updatingStatusId === order.id || order.offline) ? 'not-allowed' : 'pointer',
+                        cursor: updatingStatusId === order.id ? 'not-allowed' : 'pointer',
                         fontSize: '0.85rem'
                       }}
                     >
@@ -1081,26 +1452,53 @@ const DeliveryOrders = () => {
                       <option value="delivered">✅ Delivered</option>
                     </select>
                   </div>
+                  
+                  {/* Offline Status Label - Show when status was updated offline */}
+                  {((order.offline && (order.orderStatus || order.order_status)) || order.offlineStatusUpdated) && (
+                    <div style={{
+                      padding: '0.4rem 0.6rem',
+                      background: '#fff4d8',
+                      borderRadius: '6px',
+                      fontSize: '0.75rem',
+                      color: '#7c2d12',
+                      fontWeight: '600',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      marginTop: '0.5rem'
+                    }}>
+                      <span>📴</span>
+                      <span>
+                        Status: {(() => {
+                          const status = order.orderStatus || order.order_status || 'pending';
+                          return status.replace(/_/g, ' ');
+                        })()} - Offline Mode
+                      </span>
+                    </div>
+                  )}
 
                   {/* Action Buttons */}
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button
                       onClick={() => {
-                        sessionStorage.setItem('orderToEdit', JSON.stringify({ id: order.id, orderType: 'delivery' }));
+                        sessionStorage.setItem('orderToEdit', JSON.stringify({ 
+                          id: order.id, 
+                          orderType: 'delivery',
+                          offline: order.offline || false,
+                          offlineId: order.offlineId || null
+                        }));
                         navigate('/manager/orders');
                       }}
-                      disabled={order.offline}
                       style={{
                         flex: 1,
                         padding: '0.75rem',
                         border: '2px solid #007bff',
                         borderRadius: '8px',
-                        background: order.offline ? '#f8f9fa' : 'white',
-                        color: order.offline ? '#adb5bd' : '#007bff',
+                        background: 'white',
+                        color: '#007bff',
                         fontWeight: 'bold',
-                        cursor: order.offline ? 'not-allowed' : 'pointer',
-                        fontSize: '0.9rem',
-                        opacity: order.offline ? 0.6 : 1
+                        cursor: 'pointer',
+                        fontSize: '0.9rem'
                       }}
                     >
                       ✏️ Edit Order

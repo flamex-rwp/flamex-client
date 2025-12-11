@@ -4,7 +4,7 @@ import { menuItemsAPI, ordersAPI, API_BASE_URL } from '../services/api';
 import { printReceipt } from './Receipt';
 import OfflineIndicator from './OfflineIndicator';
 import { customerAPI } from '../services/customerAPI';
-import { saveOfflineOrder, cacheMenuItems, getCachedMenuItems, getCachedTableAvailability } from '../utils/offlineDB';
+import { saveOfflineOrder, cacheMenuItems, getCachedMenuItems, getCachedTableAvailability, getOfflineOrderById, updateOfflineOrder, addPendingOperation, getAllOrders } from '../utils/offlineDB';
 import { isOnline } from '../utils/offlineSync';
 import { useToast } from '../contexts/ToastContext';
 import { keyboardShortcuts } from '../utils/keyboardShortcuts';
@@ -80,18 +80,102 @@ const OrderSystem = () => {
           // Fetch from API when online
           const response = await ordersAPI.getTableAvailability();
           const tables = response.data.data?.occupied_tables || [];
-          setOccupiedTables(tables);
+          // Normalize table structure to ensure consistent format
+          const normalizedTables = tables.map(t => ({
+            tableNumber: t.tableNumber || t.table_number,
+            id: t.id,
+            orderId: t.id,
+            orderNumber: t.orderNumber || t.order_number
+          }));
+          setOccupiedTables(normalizedTables);
         } else {
           // Load from cache when offline
           const cachedTables = await getCachedTableAvailability();
-          setOccupiedTables(cachedTables || []);
+          console.log('[OrderSystem] Cached tables from store:', cachedTables);
+          
+          // Also check offline orders that might be occupying tables
+          const allOrders = await getAllOrders();
+          console.log('[OrderSystem] All orders from IndexedDB:', allOrders.length);
+          
+          // Filter for dine-in orders with pending payment status and table numbers
+          const offlineOccupiedTables = allOrders
+            .filter(order => 
+              order.orderType === 'dine_in' &&
+              order.paymentStatus === 'pending' &&
+              order.orderStatus !== 'cancelled' &&
+              order.tableNumber !== null &&
+              order.tableNumber !== undefined
+            )
+            .map(order => ({
+              tableNumber: order.tableNumber,
+              table_number: order.tableNumber,
+              id: order.id,
+              orderId: order.id,
+              orderNumber: order.orderNumber || order.order_number,
+              order_number: order.orderNumber || order.order_number
+            }));
+          
+          console.log('[OrderSystem] Offline occupied tables from orders:', offlineOccupiedTables);
+          
+          // Combine cached tables and offline orders, removing duplicates
+          const combinedTables = [...cachedTables];
+          offlineOccupiedTables.forEach(offlineTable => {
+            const tableNum = offlineTable.tableNumber;
+            // Check if this table is already in the list
+            const exists = combinedTables.some(t => {
+              const tNum = t.tableNumber || t.table_number;
+              return tNum !== null && tNum !== undefined && parseInt(tNum) === parseInt(tableNum);
+            });
+            if (!exists) {
+              combinedTables.push(offlineTable);
+            }
+          });
+          
+          console.log('[OrderSystem] Combined occupied tables (offline):', combinedTables);
+          setOccupiedTables(combinedTables);
         }
       } catch (error) {
         console.warn('Failed to fetch table availability:', error);
         // Try to load from cache as fallback
         try {
           const cachedTables = await getCachedTableAvailability();
-          setOccupiedTables(cachedTables || []);
+          
+          // Also check offline orders
+          try {
+            const allOrders = await getAllOrders();
+            const offlineOccupiedTables = allOrders
+              .filter(order => 
+                order.orderType === 'dine_in' &&
+                order.paymentStatus === 'pending' &&
+                order.orderStatus !== 'cancelled' &&
+                order.tableNumber !== null &&
+                order.tableNumber !== undefined
+              )
+              .map(order => ({
+                tableNumber: order.tableNumber,
+                table_number: order.tableNumber,
+                id: order.id,
+                orderId: order.id,
+                orderNumber: order.orderNumber || order.order_number,
+                order_number: order.orderNumber || order.order_number
+              }));
+            
+            const combinedTables = [...cachedTables];
+            offlineOccupiedTables.forEach(offlineTable => {
+              const tableNum = offlineTable.tableNumber;
+              const exists = combinedTables.some(t => 
+                (t.tableNumber || t.table_number) === tableNum
+              );
+              if (!exists) {
+                combinedTables.push(offlineTable);
+              }
+            });
+            
+            setOccupiedTables(combinedTables);
+          } catch (offlineError) {
+            console.warn('Failed to load offline orders:', offlineError);
+            setOccupiedTables(cachedTables || []);
+          }
         } catch (cacheError) {
           console.warn('Failed to load cached tables:', cacheError);
           setOccupiedTables([]);
@@ -128,6 +212,62 @@ const OrderSystem = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
+  }, [isDelivery]);
+
+  // Also update occupied tables when orders change (for offline mode)
+  useEffect(() => {
+    if (isDelivery || isOnline()) return;
+    
+    const updateOccupiedTablesFromOrders = async () => {
+      try {
+        const cachedTables = await getCachedTableAvailability();
+        const allOrders = await getAllOrders();
+        
+        // Filter for dine-in orders with pending payment status and table numbers
+        const offlineOccupiedTables = allOrders
+          .filter(order => 
+            order.orderType === 'dine_in' &&
+            order.paymentStatus === 'pending' &&
+            order.orderStatus !== 'cancelled' &&
+            order.tableNumber !== null &&
+            order.tableNumber !== undefined
+          )
+          .map(order => ({
+            tableNumber: order.tableNumber,
+            table_number: order.tableNumber,
+            id: order.id,
+            orderId: order.id,
+            orderNumber: order.orderNumber || order.order_number,
+            order_number: order.orderNumber || order.order_number
+          }));
+        
+        // Combine cached tables and offline orders, removing duplicates
+        const combinedTables = [...cachedTables];
+        offlineOccupiedTables.forEach(offlineTable => {
+          const tableNum = offlineTable.tableNumber;
+          // Check if this table is already in the list
+          const exists = combinedTables.some(t => 
+            (t.tableNumber || t.table_number) === tableNum
+          );
+          if (!exists) {
+            combinedTables.push(offlineTable);
+          }
+        });
+        
+        console.log('[OrderSystem] Updated occupied tables from orders:', combinedTables);
+        setOccupiedTables(combinedTables);
+      } catch (error) {
+        console.warn('Failed to update occupied tables from orders:', error);
+      }
+    };
+    
+    // Update immediately
+    updateOccupiedTablesFromOrders();
+    
+    // Set up interval to check for changes
+    const interval = setInterval(updateOccupiedTablesFromOrders, 5000);
+    
+    return () => clearInterval(interval);
   }, [isDelivery]);
 
   const updateActiveCart = useCallback((updates) => {
@@ -177,6 +317,39 @@ const OrderSystem = () => {
   };
 
   const handleTableNumberChange = (value) => {
+    // Check if table is occupied before allowing selection
+    if (value && !isDelivery) {
+      const tableNum = parseInt(value);
+      if (!isNaN(tableNum)) {
+        const isOccupied = occupiedTables.some(t => {
+          // If editing and this is the same order, don't consider it occupied
+          const occupiedOrderId = t.orderId || t.order_id || t.id;
+          const occupiedOrderNumber = t.orderNumber || t.order_number;
+          
+          if (editingOrder && (
+            (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+            (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
+          )) {
+            return false;
+          }
+          // Check both tableNumber and table_number fields, ensure proper number comparison
+          const occupiedTableNum = t.tableNumber || t.table_number;
+          if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+          return parseInt(occupiedTableNum) === tableNum;
+        });
+
+        if (isOccupied) {
+          const occupiedOrder = occupiedTables.find(t => {
+            const occupiedTableNum = t.tableNumber || t.table_number;
+            return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
+          });
+          const orderNumber = occupiedOrder?.orderNumber || occupiedOrder?.order_number || 'N/A';
+          showError(`Table #${tableNum} is already reserved (Order #${orderNumber}). Please select a different table.`);
+          return; // Don't update the table number
+        }
+      }
+    }
+    
     updateActiveCart({ tableNumber: value });
     setCheckoutError('');
   };
@@ -213,8 +386,45 @@ const OrderSystem = () => {
 
     setPhoneSearchLoading(true);
     try {
-      const response = await customerAPI.searchByPhone(trimmedPhone, 10);
-      const customers = response.data?.data || response.data || [];
+      let customers = [];
+      
+      // Check if offline - use cached customers
+      if (!isOnline()) {
+        const { getCachedCustomers } = await import('../utils/offlineDB');
+        const cachedCustomers = await getCachedCustomers();
+        // Filter customers by phone number (partial match)
+        const normalizedSearch = trimmedPhone.replace(/\s+/g, '');
+        customers = cachedCustomers.filter(c => {
+          const customerPhone = (c.phone || '').replace(/\s+/g, '');
+          return customerPhone.includes(normalizedSearch) || normalizedSearch.includes(customerPhone);
+        }).slice(0, 10);
+      } else {
+        // Online - use API
+        try {
+          const response = await customerAPI.searchByPhone(trimmedPhone, 10);
+          customers = response.data?.data || response.data || [];
+          
+          // Cache customers for offline use
+          if (Array.isArray(customers) && customers.length > 0) {
+            const { cacheCustomers } = await import('../utils/offlineDB');
+            await cacheCustomers(customers);
+          }
+        } catch (apiErr) {
+          // If API fails, fall back to cached customers
+          if (apiErr.code === 'ERR_NETWORK' || !apiErr.response) {
+            const { getCachedCustomers } = await import('../utils/offlineDB');
+            const cachedCustomers = await getCachedCustomers();
+            const normalizedSearch = trimmedPhone.replace(/\s+/g, '');
+            customers = cachedCustomers.filter(c => {
+              const customerPhone = (c.phone || '').replace(/\s+/g, '');
+              return customerPhone.includes(normalizedSearch) || normalizedSearch.includes(customerPhone);
+            }).slice(0, 10);
+          } else {
+            throw apiErr;
+          }
+        }
+      }
+      
       setPhoneSuggestions(Array.isArray(customers) ? customers : []);
       setShowPhoneSuggestions(true);
     } catch (err) {
@@ -248,20 +458,35 @@ const OrderSystem = () => {
     setShowPhoneSuggestions(false);
     setPhoneSuggestions([]);
 
-    // Fetch full customer data with addresses
+    // Fetch full customer data with addresses (online) or use cached data (offline)
     try {
-      const response = await customerAPI.getById(customer.id);
-      const fullCustomer = response.data?.data || response.data;
-      
-      // Update selected customer with full data
-      setSelectedCustomer(fullCustomer);
-      
-      // Set first address if available
-      const firstAddress = fullCustomer.addresses && fullCustomer.addresses.length > 0
-        ? fullCustomer.addresses[0].address
-        : fullCustomer.address || customer.address || '';
-      if (firstAddress) {
-        updateActiveCart({ deliveryAddress: firstAddress });
+      const customerIdStr = String(customer.id ?? '');
+      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+
+      if (isOnline() && !isOfflineId) {
+        // Online - fetch full customer data
+        const response = await customerAPI.getById(customer.id);
+        const fullCustomer = response.data?.data || response.data;
+        
+        // Update selected customer with full data
+        setSelectedCustomer(fullCustomer);
+        
+        // Set first address if available
+        const firstAddress = fullCustomer.addresses && fullCustomer.addresses.length > 0
+          ? fullCustomer.addresses[0].address
+          : fullCustomer.address || customer.address || '';
+        if (firstAddress) {
+          updateActiveCart({ deliveryAddress: firstAddress });
+        }
+      } else {
+        // Offline or offline customer - use cached data
+        setSelectedCustomer(customer);
+        const firstAddress = customer.addresses && customer.addresses.length > 0
+          ? customer.addresses[0].address
+          : customer.address || '';
+        if (firstAddress) {
+          updateActiveCart({ deliveryAddress: firstAddress });
+        }
       }
     } catch (err) {
       console.error('Failed to load full customer data:', err);
@@ -287,7 +512,79 @@ const OrderSystem = () => {
       throw new Error('Customer phone is required');
     }
 
-    // Use findOrCreate API for automatic customer creation
+    // Check if offline - use cached customers or create offline customer
+    if (!isOnline()) {
+      try {
+        const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
+        const cachedCustomers = await getCachedCustomers();
+        
+        // Find existing customer by phone
+        const existingCustomer = cachedCustomers.find(c => 
+          (c.phone || '').replace(/\s+/g, '') === phone
+        );
+        
+        if (existingCustomer) {
+          // Customer exists, check if address is different
+          const existingAddresses = existingCustomer.addresses || [];
+          const addressExists = existingAddresses.some(addr => 
+            (addr.address || '').trim() === address.trim()
+          );
+          
+          // If address is different and provided, we'll queue it for sync
+          if (address && !addressExists) {
+            // Queue address update for sync
+            const { addPendingOperation } = await import('../utils/offlineDB');
+            await addPendingOperation({
+              type: 'update_customer_address',
+              endpoint: `/api/customers/${existingCustomer.id}/address`,
+              method: 'POST',
+              data: { address }
+            });
+          }
+          
+          return existingCustomer.id;
+        } else {
+          // Create offline customer
+          const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          const newCustomer = {
+            id: offlineCustomerId,
+            phone,
+            name: name || 'Delivery Customer',
+            backupPhone: backup || null,
+            addresses: address ? [{ address, isDefault: true }] : [],
+            notes: notes || null,
+            synced: false,
+            createdAt: new Date().toISOString()
+          };
+          
+          await saveCustomer(newCustomer);
+          
+          // Queue customer creation for sync
+          const { addPendingOperation } = await import('../utils/offlineDB');
+          await addPendingOperation({
+            type: 'create_customer',
+            endpoint: '/api/customers/find-or-create',
+            method: 'POST',
+            data: {
+              phone,
+              name: name || undefined,
+              address: address || undefined,
+              backupPhone: backup || undefined,
+              notes: notes || undefined
+            },
+            offlineId: offlineCustomerId
+          });
+          
+          return offlineCustomerId;
+        }
+      } catch (offlineErr) {
+        console.error('Failed to handle customer offline:', offlineErr);
+        // Fallback: create a temporary offline customer ID
+        return `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      }
+    }
+
+    // Online: Use findOrCreate API for automatic customer creation
     try {
       const response = await customerAPI.findOrCreate({
         phone,
@@ -301,6 +598,74 @@ const OrderSystem = () => {
       return customer.id;
     } catch (err) {
       console.error('Failed to find or create customer:', err);
+      
+          // If network error, fall back to offline mode
+          if (err.code === 'ERR_NETWORK' || !err.response) {
+            try {
+              const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
+              const cachedCustomers = await getCachedCustomers();
+              
+              const existingCustomer = cachedCustomers.find(c => 
+                (c.phone || '').replace(/\s+/g, '') === phone
+              );
+              
+              if (existingCustomer) {
+                // Customer exists - only add address if it's new, don't update user
+                if (address && address.trim()) {
+                  const existingAddresses = existingCustomer.addresses || [];
+                  const addressExists = existingAddresses.some(addr => 
+                    (addr.address || '').trim().toLowerCase() === address.trim().toLowerCase()
+                  );
+                  
+                  if (!addressExists) {
+                    const { addPendingOperation } = await import('../utils/offlineDB');
+                    await addPendingOperation({
+                      type: 'add_customer_address',
+                      endpoint: `/api/customers/${existingCustomer.id}/addresses`,
+                      method: 'POST',
+                      data: { address: address.trim() }
+                    });
+                  }
+                }
+                return existingCustomer.id;
+              } else {
+                // Customer doesn't exist - create new entry
+                const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                const newCustomer = {
+                  id: offlineCustomerId,
+                  phone,
+                  name: name || 'Delivery Customer',
+                  backupPhone: backup || null,
+                  addresses: address ? [{ address: address.trim(), isDefault: true }] : [],
+                  notes: notes || null,
+                  synced: false,
+                  createdAt: new Date().toISOString()
+                };
+                
+                await saveCustomer(newCustomer);
+                
+                const { addPendingOperation } = await import('../utils/offlineDB');
+                await addPendingOperation({
+                  type: 'create_customer',
+                  endpoint: '/api/customers/find-or-create',
+                  method: 'POST',
+                  data: {
+                    phone,
+                    name: name || undefined,
+                    address: address || undefined,
+                    backupPhone: backup || undefined,
+                    notes: notes || undefined
+                  },
+                  offlineId: offlineCustomerId
+                });
+                
+                return offlineCustomerId;
+              }
+            } catch (fallbackErr) {
+              console.error('Fallback customer creation failed:', fallbackErr);
+            }
+          }
+      
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message;
       throw new Error(errorMsg || 'Unable to process customer information');
     }
@@ -312,18 +677,40 @@ const OrderSystem = () => {
     setEditLoading(true);
     setEditLoadError('');
     try {
-      const [orderRes, itemsRes] = await Promise.all([
-        ordersAPI.getById(orderMeta.id),
-        ordersAPI.getOrderItems(orderMeta.id)
-      ]);
+      let orderDetails = {};
+      let itemDetails = [];
+      
+      // Check if this is an offline order
+      if (orderMeta.offline || String(orderMeta.id).startsWith('OFFLINE-')) {
+        // Load from IndexedDB
+        const offlineOrder = await getOfflineOrderById(orderMeta.offlineId || orderMeta.id);
+        if (offlineOrder) {
+          const orderData = offlineOrder.data || offlineOrder;
+          orderDetails = orderData;
+          itemDetails = (orderData.orderItems || orderData.items || []).map(item => ({
+            id: item.menuItemId || item.menu_item_id || item.id,
+            name: item.itemName || item.name || item.item_name || item.menuItem?.name || 'Item',
+            price: Number(item.price || item.item_price || 0),
+            quantity: item.quantity || 1
+          }));
+        } else {
+          throw new Error('Offline order not found');
+        }
+      } else {
+        // Load from API
+        const [orderRes, itemsRes] = await Promise.all([
+          ordersAPI.getById(orderMeta.id),
+          ordersAPI.getOrderItems(orderMeta.id)
+        ]);
 
-      const orderDetails = orderRes.data.data || {};
-      const itemDetails = (itemsRes.data.data || []).map(item => ({
-        id: item.menuItemId || item.menu_item_id,
-        name: item.itemName || item.name || item.item_name,
-        price: Number(item.price) || 0,
-        quantity: item.quantity || 1
-      }));
+        orderDetails = orderRes.data.data || {};
+        itemDetails = (itemsRes.data.data || []).map(item => ({
+          id: item.menuItemId || item.menu_item_id,
+          name: item.itemName || item.name || item.item_name,
+          price: Number(item.price) || 0,
+          quantity: item.quantity || 1
+        }));
+      }
 
       setCarts(prevCarts =>
         prevCarts.map(c => {
@@ -372,7 +759,9 @@ const OrderSystem = () => {
       setEditingOrder({
         id: orderMeta.id,
         order_number: orderDetails.orderNumber || orderDetails.order_number,
-        orderType: orderDetails.orderType || orderDetails.order_type || 'dine_in'
+        orderType: orderDetails.orderType || orderDetails.order_type || 'dine_in',
+        offline: orderMeta.offline || false,
+        offlineId: orderMeta.offlineId || null
       });
       setCheckoutError('');
     } catch (error) {
@@ -558,20 +947,22 @@ const OrderSystem = () => {
       }
 
       // Check if table is occupied (excluding current order if editing)
-      const isOccupied = occupiedTables.some(t => {
-        // If editing and this is the same order, don't consider it occupied
-        const occupiedOrderId = t.orderId || t.order_id || t.id;
-        const occupiedOrderNumber = t.orderNumber || t.order_number;
-
-        if (editingOrder && (
-          (occupiedOrderId && occupiedOrderId === editingOrder.id) ||
-          (occupiedOrderNumber && occupiedOrderNumber === editingOrder.order_number)
-        )) {
-          return false;
-        }
-        const occupiedTableNum = t.tableNumber || t.table_number;
-        return occupiedTableNum === tableNum;
-      });
+                      const isOccupied = occupiedTables.some(t => {
+                        // If editing and this is the same order, don't consider it occupied
+                        const occupiedOrderId = t.orderId || t.order_id || t.id;
+                        const occupiedOrderNumber = t.orderNumber || t.order_number;
+                        
+                        if (editingOrder && (
+                          (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+                          (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
+                        )) {
+                          return false;
+                        }
+                        // Check both tableNumber and table_number fields, ensure proper number comparison
+                        const occupiedTableNum = t.tableNumber || t.table_number;
+                        if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+                        return parseInt(occupiedTableNum) === tableNum;
+                      });
 
       if (isOccupied) {
         const occupiedOrder = occupiedTables.find(t => (t.tableNumber || t.table_number) === tableNum);
@@ -623,39 +1014,90 @@ const OrderSystem = () => {
       let isOffline = false;
 
       if (editingOrder) {
-        if (!isOnline()) {
-          setCheckoutError('Cannot update an order while offline.');
-          return;
-        }
+        const updateData = {
+          items: orderItems,
+          totalAmount: totalAmount,
+          orderType: orderType,
+          paymentMethod: paymentMethod,
+          paymentStatus: paymentStatus,
+          ...(isDelivery && {
+            customerId: customerId,
+            deliveryAddress: deliveryAddress.trim(),
+            deliveryNotes: deliveryNotes.trim() || undefined,
+            deliveryCharge: deliveryChargeValue
+          }),
+          ...(!isDelivery && {
+            tableNumber: parseInt(tableNumber)
+          }),
+          specialInstructions: specialInstructions.trim() || undefined,
+          discountPercent: discountPercent || 0
+        };
 
-        try {
-          const updateData = {
-            items: orderItems,
-            totalAmount: totalAmount,
-            orderType: orderType,
-            paymentMethod: paymentMethod,
-            paymentStatus: paymentStatus,
-            ...(isDelivery && {
-              customerId: customerId,
-              deliveryAddress: deliveryAddress.trim(),
-              deliveryNotes: deliveryNotes.trim() || undefined,
-              deliveryCharge: deliveryChargeValue
-            }),
-            ...(!isDelivery && {
-              tableNumber: parseInt(tableNumber)
-            }),
-            specialInstructions: specialInstructions.trim() || undefined,
-            discountPercent: discountPercent || 0
-          };
-
-          const response = await ordersAPI.update(editingOrder.id, updateData);
-          orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
-          showSuccess(`Order #${orderNumber || editingOrder.id} updated successfully!`);
-        } catch (error) {
-          console.error('Error updating order:', error);
-          const message = error.response?.data?.error || 'Failed to update order. Please try again.';
-          setCheckoutError(message);
-          return;
+        // Check if editing an offline order
+        if (editingOrder.offline || !isOnline()) {
+          try {
+            // Update offline order in IndexedDB
+            const offlineId = editingOrder.offlineId || editingOrder.id;
+            await updateOfflineOrder(offlineId, {
+              ...updateData,
+              updatedAt: new Date().toISOString()
+            });
+            
+            // Queue update operation for sync
+            await addPendingOperation({
+              type: 'update_order',
+              endpoint: `/api/orders/${editingOrder.id}`,
+              method: 'PUT',
+              data: updateData,
+              offlineId: offlineId
+            });
+            
+            orderNumber = editingOrder.order_number;
+            isOffline = true;
+            showSuccess(`Order #${orderNumber || editingOrder.id} updated offline. It will sync when you are back online.`);
+          } catch (error) {
+            console.error('Error updating offline order:', error);
+            setCheckoutError('Failed to update order offline. Please try again.');
+            return;
+          }
+        } else {
+          // Online order update
+          try {
+            const response = await ordersAPI.update(editingOrder.id, updateData);
+            orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
+            showSuccess(`Order #${orderNumber || editingOrder.id} updated successfully!`);
+          } catch (error) {
+            console.error('Error updating order:', error);
+            // If API fails, try to save offline
+            if (!error.response || error.code === 'ERR_NETWORK') {
+              try {
+                const offlineId = editingOrder.offlineId || editingOrder.id;
+                await updateOfflineOrder(offlineId, {
+                  ...updateData,
+                  updatedAt: new Date().toISOString()
+                });
+                await addPendingOperation({
+                  type: 'update_order',
+                  endpoint: `/api/orders/${editingOrder.id}`,
+                  method: 'PUT',
+                  data: updateData,
+                  offlineId: offlineId
+                });
+                orderNumber = editingOrder.order_number;
+                isOffline = true;
+                showInfo('Order update saved offline. It will sync when connection is restored.');
+              } catch (offlineError) {
+                console.error('Error saving update offline:', offlineError);
+                const message = error.response?.data?.error || 'Failed to update order. Please try again.';
+                setCheckoutError(message);
+                return;
+              }
+            } else {
+              const message = error.response?.data?.error || 'Failed to update order. Please try again.';
+              setCheckoutError(message);
+              return;
+            }
+          }
         }
       } else {
         const orderData = {
@@ -712,6 +1154,9 @@ const OrderSystem = () => {
         })),
         subtotal: subtotal,
         total_amount: totalAmount,
+        // pass discount so receipts show it
+        discount_percent: discountPercent || 0,
+        discountPercent: discountPercent || 0,
         delivery_charge: deliveryChargeValue,
         payment_method: paymentMethod,
         payment_status: paymentStatus,
@@ -845,14 +1290,16 @@ const OrderSystem = () => {
       const occupiedOrderNumber = t.orderNumber || t.order_number;
 
       if (editingOrder && (
-        (occupiedOrderId && occupiedOrderId === editingOrder.id) ||
-        (occupiedOrderNumber && occupiedOrderNumber === editingOrder.order_number)
+        (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+        (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
       )) {
         return false;
       }
       
+      // Check both tableNumber and table_number fields, ensure proper number comparison
       const occupiedTableNum = t.tableNumber || t.table_number;
-      return occupiedTableNum === tableNum;
+      if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+      return parseInt(occupiedTableNum) === tableNum;
     });
   }, [isDelivery, tableNumber, occupiedTables, editingOrder]);
 
@@ -1451,18 +1898,39 @@ const OrderSystem = () => {
                   }}>
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(tableNum => {
                       const isOccupied = occupiedTables.some(t => {
-                        if (editingOrder && t.order_id === editingOrder.id) {
+                        // If editing and this is the same order, don't consider it occupied
+                        const occupiedOrderId = t.orderId || t.order_id || t.id;
+                        const occupiedOrderNumber = t.orderNumber || t.order_number;
+                        
+                        if (editingOrder && (
+                          (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+                          (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
+                        )) {
                           return false;
                         }
+                        // Check both tableNumber and table_number fields
                         const occupiedTableNum = t.tableNumber || t.table_number;
-                        return occupiedTableNum === tableNum;
+                        // Ensure we're comparing numbers
+                        return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
                       });
                       const isSelected = parseInt(tableNumber) === tableNum;
                       return (
                         <button
                           key={tableNum}
                           type="button"
-                          onClick={() => handleTableNumberChange(tableNum.toString())}
+                          onClick={() => {
+                            if (!isOccupied) {
+                              handleTableNumberChange(tableNum.toString());
+                            } else {
+                              // Show error message when clicking on occupied table
+                              const occupiedOrder = occupiedTables.find(t => {
+                                const occupiedTableNum = t.tableNumber || t.table_number;
+                                return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
+                              });
+                              const orderNumber = occupiedOrder?.orderNumber || occupiedOrder?.order_number || 'N/A';
+                              showError(`Table #${tableNum} is already reserved (Order #${orderNumber}). Please select a different table.`);
+                            }
+                          }}
                           disabled={isOccupied}
                           style={{
                             padding: '0.75rem',
@@ -1512,11 +1980,20 @@ const OrderSystem = () => {
                     }}
                   />
                   {occupiedTables.some(t => {
-                    if (editingOrder && t.order_id === editingOrder.id) {
+                    // If editing and this is the same order, don't consider it occupied
+                    const occupiedOrderId = t.orderId || t.order_id || t.id;
+                    const occupiedOrderNumber = t.orderNumber || t.order_number;
+                    
+                    if (editingOrder && (
+                      (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+                      (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
+                    )) {
                       return false;
                     }
+                    // Check both tableNumber and table_number fields, ensure proper number comparison
                     const occupiedTableNum = t.tableNumber || t.table_number;
-                    return occupiedTableNum === parseInt(tableNumber);
+                    if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+                    return parseInt(occupiedTableNum) === parseInt(tableNumber);
                   }) && tableNumber && (
                       <div style={{
                         marginTop: '0.5rem',

@@ -186,3 +186,4 @@ const { online, pendingOperations } = useOffline();
 5. Open another tab → Should see the order appear
 
 
+

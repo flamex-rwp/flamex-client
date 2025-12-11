@@ -90,11 +90,36 @@ api.interceptors.response.use(
     const status = error.response?.status || 'N/A';
 
     // For GET requests when offline or network error, try to return cached data
-    if (method === 'GET' && error.config?._shouldCheckCache && (!isOnline() || !error.response)) {
+    // Check for network errors: no response object, or network error code, or offline
+    const isNetworkError = !error.response || 
+                          error.code === 'ERR_NETWORK' || 
+                          error.message === 'Network Error' ||
+                          !isOnline();
+    
+    if (method === 'GET' && error.config?._shouldCheckCache && isNetworkError) {
       try {
         const params = error.config.params || {};
+        // Normalize URL - remove base URL if present, ensure it starts with /
+        let normalizedUrl = url;
+        if (normalizedUrl.startsWith('http')) {
+          try {
+            const urlObj = new URL(normalizedUrl);
+            normalizedUrl = urlObj.pathname + urlObj.search;
+          } catch (e) {
+            // If URL parsing fails, try to extract path
+            const match = normalizedUrl.match(/\/api\/.*/);
+            if (match) normalizedUrl = match[0];
+          }
+        }
+        if (!normalizedUrl.startsWith('/')) {
+          normalizedUrl = '/' + normalizedUrl;
+        }
+        
         // Build full URL with query params for cache lookup
-        const fullUrl = url.includes('?') ? url : url + (Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : '');
+        const fullUrl = normalizedUrl.includes('?') 
+          ? normalizedUrl 
+          : normalizedUrl + (Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : '');
+        
         const cachedResponse = await getCachedAPIResponse(fullUrl, method, params);
         if (cachedResponse) {
           console.log(`📦 Serving from cache (${!isOnline() ? 'offline' : 'network error'}): ${fullUrl}`);

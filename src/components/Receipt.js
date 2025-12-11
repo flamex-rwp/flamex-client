@@ -334,7 +334,9 @@ const generateHTMLReceipt = (orderData, printStage) => {
     table_number,
     special_instructions,
     delivery_notes,
-    subtotal
+    subtotal,
+    discount_percent,
+    discountPercent
   } = orderData || {};
 
   const orderId = orderData?.id || Date.now();
@@ -355,8 +357,14 @@ const generateHTMLReceipt = (orderData, printStage) => {
   const calculatedSubtotal = safeItems.reduce((sum, item) => {
     return sum + (Number(item.price || 0) * Number(item.quantity || 0));
   }, 0);
-  const actualSubtotal = subtotal || calculatedSubtotal;
-  const total = Number(total_amount) || (actualSubtotal + deliveryFee);
+  const subtotalBeforeDiscount = subtotal || calculatedSubtotal;
+  const discountPercentValue = discount_percent || discountPercent || 0;
+  const discountAmount = discountPercentValue > 0 ? (subtotalBeforeDiscount * discountPercentValue / 100) : 0;
+  const subtotalAfterDiscount = subtotalBeforeDiscount - discountAmount;
+  const calculatedTotal = subtotalAfterDiscount + deliveryFee;
+  const apiTotalAmount = Number(total_amount) || 0;
+  // Use API total_amount only if it matches our calculation (within 1 PKR tolerance), otherwise recalculate
+  const total = (apiTotalAmount > 0 && Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -479,11 +487,17 @@ const generateHTMLReceipt = (orderData, printStage) => {
         <!-- TOTALS - Prominent display -->
         <div class="header-text">TOTAL AMOUNT</div>
         <table class="order-info">
-          ${isDelivery && deliveryFee > 0 ? `
           <tr>
             <td class="col-item">Subtotal:</td>
-            <td class="col-price">${formatCurrency(actualSubtotal)}</td>
+            <td class="col-price">${formatCurrency(subtotalBeforeDiscount)}</td>
           </tr>
+          ${discountPercentValue > 0 ? `
+          <tr>
+            <td class="col-item">Discount (${discountPercentValue}%):</td>
+            <td class="col-price">-${formatCurrency(discountAmount)}</td>
+          </tr>
+          ` : ''}
+          ${isDelivery && deliveryFee > 0 ? `
           <tr>
             <td class="col-item">Delivery:</td>
             <td class="col-price">${formatCurrency(deliveryFee)}</td>
@@ -648,7 +662,9 @@ const Receipt = ({ orderData, printStage }) => {
     table_number,
     special_instructions,
     delivery_notes,
-    subtotal
+    subtotal,
+    discount_percent,
+    discountPercent
   } = orderData || {};
 
   const orderId = orderData?.id || Date.now();
@@ -668,8 +684,14 @@ const Receipt = ({ orderData, printStage }) => {
   const calculatedSubtotal = safeItems.reduce((sum, item) => {
     return sum + (Number(item.price || 0) * Number(item.quantity || 0));
   }, 0);
-  const actualSubtotal = subtotal || calculatedSubtotal;
-  const total = Number(total_amount) || (actualSubtotal + deliveryFee);
+  const subtotalBeforeDiscount = subtotal || calculatedSubtotal;
+  const discountPercentValue = discount_percent || discountPercent || 0;
+  const discountAmount = discountPercentValue > 0 ? (subtotalBeforeDiscount * discountPercentValue / 100) : 0;
+  const subtotalAfterDiscount = subtotalBeforeDiscount - discountAmount;
+  const calculatedTotal = subtotalAfterDiscount + deliveryFee;
+  const apiTotalAmount = Number(total_amount) || 0;
+  // Use API total_amount only if it matches our calculation (within 1 PKR tolerance), otherwise recalculate
+  const total = (apiTotalAmount > 0 && Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -936,17 +958,21 @@ const Receipt = ({ orderData, printStage }) => {
         <div style={headerStyle}>TOTAL AMOUNT</div>
         <table style={tableStyle}>
           <tbody>
+            <tr>
+              <td style={tdLeftStyle}>Subtotal:</td>
+              <td style={tdRightStyle}>{formatCurrency(subtotalBeforeDiscount)}</td>
+            </tr>
+            {discountPercentValue > 0 && (
+              <tr>
+                <td style={tdLeftStyle}>Discount ({discountPercentValue}%):</td>
+                <td style={tdRightStyle}>-{formatCurrency(discountAmount)}</td>
+              </tr>
+            )}
             {isDelivery && deliveryFee > 0 && (
-              <>
-                <tr>
-                  <td style={tdLeftStyle}>Subtotal:</td>
-                  <td style={tdRightStyle}>{formatCurrency(actualSubtotal)}</td>
-                </tr>
-                <tr>
-                  <td style={tdLeftStyle}>Delivery:</td>
-                  <td style={tdRightStyle}>{formatCurrency(deliveryFee)}</td>
-                </tr>
-              </>
+              <tr>
+                <td style={tdLeftStyle}>Delivery:</td>
+                <td style={tdRightStyle}>{formatCurrency(deliveryFee)}</td>
+              </tr>
             )}
             <tr>
               <td style={{ ...tdLeftStyle, fontSize: '16px', fontWeight: 'bolder' }}>GRAND TOTAL:</td>

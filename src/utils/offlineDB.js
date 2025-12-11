@@ -153,20 +153,24 @@ export const openDB = () => {
         };
       }
 
-      console.log(`[IndexedDB] Database upgraded to version ${DB_VERSION}`);
     };
   });
 };
 
 // ==================== ORDERS ====================
 
+/**
+ * Saves an order to IndexedDB. Generates an offline ID if needed.
+ * For delivery orders, ensures deliveryStatus defaults to 'pending' for new orders.
+ * 
+ * @param {Object} orderData - Order data to save
+ * @returns {Promise<Object>} Saved order object
+ * @throws {Error} If order ID validation fails or IndexedDB operation fails
+ */
 export const saveOrder = async (orderData) => {
   try {
-    // Always generate a new ID for offline orders to ensure it's never undefined
-    // Check if orderData has a valid ID (from server response)
-    let orderId = orderData.id;
+    let orderId = orderData?.id;
     
-    // Validate ID - must be truthy, non-empty string/number, and not '0'
     const hasValidId = orderId && 
                       orderId !== '' && 
                       orderId !== 0 && 
@@ -176,55 +180,151 @@ export const saveOrder = async (orderData) => {
                       (typeof orderId === 'string' || typeof orderId === 'number');
     
     if (!hasValidId) {
-      // Generate a unique ID for offline orders
       orderId = `OFFLINE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
     
-    // Ensure it's a string
-    orderId = String(orderId);
+    orderId = String(orderId).trim();
     
-    // Validate final ID
-    if (!orderId || orderId.trim() === '') {
+    if (!orderId || orderId === '') {
       throw new Error('Failed to generate valid order ID');
     }
+    
+    const order = {};
+    
+    if (orderData && typeof orderData === 'object' && !Array.isArray(orderData)) {
+      Object.keys(orderData).forEach(key => {
+        if (key !== 'id' && orderData[key] !== undefined && orderData[key] !== null) {
+          if (Array.isArray(orderData[key])) {
+            order[key] = [...orderData[key]];
+          } else if (typeof orderData[key] === 'object') {
+            order[key] = { ...orderData[key] };
+          } else {
+            order[key] = orderData[key];
+          }
+        }
+      });
+    }
+    
+    order.synced = orderData?.synced !== undefined ? orderData.synced : false;
+    order.createdAt = orderData?.createdAt || new Date().toISOString();
+    order.updatedAt = new Date().toISOString();
+    
+    if (!order.orderStatus && !order.order_status) {
+      order.orderStatus = 'pending';
+      order.order_status = 'pending';
+    }
+    
+    const orderType = order.orderType || order.order_type;
+    const orderDataId = orderData?.id;
+    const isNewOrder = !orderDataId || 
+                      (typeof orderDataId === 'string' && orderDataId.startsWith('OFFLINE-')) || 
+                      order.synced === false;
+    
+    if (orderType === 'delivery') {
+      if (isNewOrder) {
+        order.deliveryStatus = 'pending';
+        order.delivery_status = 'pending';
+      } else if (!order.deliveryStatus && !order.delivery_status) {
+        order.deliveryStatus = 'pending';
+        order.delivery_status = 'pending';
+      }
+    }
+    
+    if (!order.paymentStatus && !order.payment_status) {
+      order.paymentStatus = orderData?.paymentStatus || orderData?.payment_status || 'pending';
+      order.payment_status = order.paymentStatus;
+    }
+    
+    order.id = orderId;
+    
+    if (!order.hasOwnProperty('id') || !order.id || order.id === undefined || order.id === null || order.id === '') {
+      throw new Error(`Order ID validation failed. Generated: ${orderId}, Final: ${order.id}`);
+    }
+    
+    const finalId = String(order.id).trim();
+    
+    if (!finalId) {
+      throw new Error(`Order ID is empty after string conversion. Original: ${order.id}`);
+    }
+    
+    order.id = finalId;
+    
+    if (typeof order.id !== 'string' || order.id === '') {
+      throw new Error(`Order ID is not a valid string. Value: ${order.id}, Type: ${typeof order.id}`);
+    }
+    
+    const idValue = String(order.id).trim();
+    
+    if (!idValue || idValue === '') {
+      throw new Error(`Invalid idValue: ${idValue}`);
+    }
+    
+    const plainOrder = {};
+    
+    Object.keys(order).forEach(key => {
+      if (key !== 'id') {
+        plainOrder[key] = order[key];
+      }
+    });
+    
+    plainOrder.id = idValue;
+    
+    if (!plainOrder.id || typeof plainOrder.id !== 'string' || plainOrder.id.trim() === '') {
+      throw new Error(`Plain object ID validation failed. Original: ${order.id}, Plain: ${plainOrder.id}, Extracted: ${idValue}`);
+    }
+    
+    const testIdRead = plainOrder.id;
+    if (!testIdRead || testIdRead !== idValue) {
+      throw new Error(`ID read test failed. Expected: ${idValue}, Got: ${testIdRead}`);
+    }
+    
+    Object.defineProperty(plainOrder, 'id', {
+      value: idValue,
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
     
     const db = await openDB();
     const tx = db.transaction('orders', 'readwrite');
     const store = tx.objectStore('orders');
-    
-    // Create order object with guaranteed ID
-    // Remove any undefined/null id from orderData first to prevent overwriting
-    const { id: _oldId, ...orderDataWithoutId } = orderData;
-    const order = {
-      ...orderDataWithoutId,
-      id: orderId, // Always set ID explicitly
-      synced: orderData.synced !== undefined ? orderData.synced : false,
-      createdAt: orderData.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
 
-    // Final validation
-    if (!order.id || order.id === undefined || order.id === null || order.id === '') {
-      throw new Error(`Order ID validation failed. Generated: ${orderId}, Final: ${order.id}`);
-    }
-
-    // Wrap put operation in Promise for proper async handling
     return new Promise((resolve, reject) => {
-      const request = store.put(order);
+      if (!plainOrder.id || typeof plainOrder.id !== 'string' || plainOrder.id.trim() === '') {
+        reject(new Error(`Cannot save order: Invalid ID. ID: ${plainOrder.id}, Type: ${typeof plainOrder.id}`));
+        return;
+      }
+      
+      const idDescriptor = Object.getOwnPropertyDescriptor(plainOrder, 'id');
+      
+      if (!idDescriptor || !idDescriptor.enumerable) {
+        Object.defineProperty(plainOrder, 'id', {
+          value: plainOrder.id,
+          enumerable: true,
+          writable: true,
+          configurable: true
+        });
+      }
+      
+      const idToSave = plainOrder.id;
+      if (!idToSave || typeof idToSave !== 'string') {
+        reject(new Error(`Invalid ID before save: ${idToSave}`));
+        return;
+      }
+      
+      const request = store.put(plainOrder);
+      
       request.onsuccess = () => {
-        console.log('[saveOrder] Order saved successfully with ID:', order.id);
-        resolve(order);
+        resolve(plainOrder);
       };
+      
       request.onerror = () => {
-        console.error('[saveOrder] Error saving order:', request.error);
-        console.error('[saveOrder] Order ID:', order.id, 'Type:', typeof order.id, 'Value:', JSON.stringify(order.id));
-        console.error('[saveOrder] Order keys:', Object.keys(order));
+        console.error('Error saving order to IndexedDB:', request.error);
         reject(request.error);
       };
     });
   } catch (error) {
-    console.error('[saveOrder] Error saving order:', error);
-    console.error('[saveOrder] Order data received:', JSON.stringify(orderData, null, 2));
+    console.error('Error in saveOrder:', error);
     throw error;
   }
 };
@@ -281,6 +381,123 @@ export const getOrderById = async (id) => {
   }
 };
 
+/**
+ * Retrieves an order from IndexedDB by orderNumber
+ * @param {string|number} orderNumber - The order number to search for
+ * @returns {Promise<Object|null>} The order object or null if not found
+ */
+export const getOrderByOrderNumber = async (orderNumber) => {
+  try {
+    if (!orderNumber) return null;
+    const db = await openDB();
+    const tx = db.transaction('orders', 'readonly');
+    const store = tx.objectStore('orders');
+    const index = store.index('orderNumber');
+    const request = index.get(orderNumber);
+
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Error getting order by orderNumber:', error);
+    return null;
+  }
+};
+
+/**
+ * Merges preserved offline status updates from IndexedDB into API-fetched orders.
+ * Ensures that orders with offline status updates don't revert to server status.
+ * 
+ * @param {Array} apiOrders - Orders fetched from the API
+ * @returns {Promise<Array>} Orders with preserved offline status merged in
+ */
+export const mergePreservedOfflineStatus = async (apiOrders) => {
+  try {
+    if (!apiOrders || apiOrders.length === 0) return apiOrders;
+    
+    const mergedOrders = await Promise.all(apiOrders.map(async (apiOrder) => {
+      const orderNumber = apiOrder.orderNumber || apiOrder.order_number;
+      if (!orderNumber) return apiOrder;
+      
+      // Check IndexedDB for order with preserved offline status
+      const dbOrder = await getOrderByOrderNumber(orderNumber);
+      if (!dbOrder) return apiOrder;
+      
+      // Check if order has offline status updates that need to be preserved
+      // Handle both nested (data) and flat structures
+      const dbData = dbOrder.data || dbOrder;
+      const offlineStatusUpdated = dbData.offlineStatusUpdated !== undefined ? dbData.offlineStatusUpdated : (dbOrder.offlineStatusUpdated !== undefined ? dbOrder.offlineStatusUpdated : false);
+      const dbDeliveryStatus = dbData.deliveryStatus || dbData.delivery_status || dbOrder.deliveryStatus || dbOrder.delivery_status;
+      const dbOrderStatus = dbData.orderStatus || dbData.order_status || dbOrder.orderStatus || dbOrder.order_status;
+      const dbPaymentStatus = dbData.paymentStatus || dbData.payment_status || dbOrder.paymentStatus || dbOrder.payment_status;
+      
+      // Status hierarchies for comparison
+      const orderStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'completed'];
+      const deliveryStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+      
+      const apiDeliveryStatus = apiOrder.deliveryStatus || apiOrder.delivery_status || 'pending';
+      const apiOrderStatus = apiOrder.orderStatus || apiOrder.order_status || 'pending';
+      const apiPaymentStatus = apiOrder.paymentStatus || apiOrder.payment_status || 'pending';
+      
+      // If offlineStatusUpdated flag is set, always preserve the offline status
+      // Otherwise, preserve if local status is more advanced than server
+      let shouldPreserveDelivery = false;
+      let shouldPreserveOrder = false;
+      let shouldPreservePayment = false;
+      
+      if (offlineStatusUpdated) {
+        // Always preserve if flag is set
+        shouldPreserveDelivery = dbDeliveryStatus && dbDeliveryStatus !== 'pending';
+        shouldPreserveOrder = dbOrderStatus && dbOrderStatus !== 'pending';
+        shouldPreservePayment = dbPaymentStatus === 'completed';
+      } else {
+        // Preserve if local is more advanced than server
+        if (dbDeliveryStatus && dbDeliveryStatus !== 'pending') {
+          const dbIndex = deliveryStatusHierarchy.indexOf(dbDeliveryStatus);
+          const apiIndex = apiDeliveryStatus ? deliveryStatusHierarchy.indexOf(apiDeliveryStatus) : -1;
+          shouldPreserveDelivery = dbIndex > apiIndex || !apiDeliveryStatus || apiDeliveryStatus === 'pending';
+        }
+        
+        if (dbOrderStatus && dbOrderStatus !== 'pending') {
+          const dbIndex = orderStatusHierarchy.indexOf(dbOrderStatus);
+          const apiIndex = apiOrderStatus ? orderStatusHierarchy.indexOf(apiOrderStatus) : -1;
+          shouldPreserveOrder = dbIndex > apiIndex || !apiOrderStatus || apiOrderStatus === 'pending';
+        }
+        
+        if (dbPaymentStatus === 'completed' && apiPaymentStatus !== 'completed') {
+          shouldPreservePayment = true;
+        }
+      }
+      
+      // Merge preserved status into API order
+      const mergedOrder = { ...apiOrder };
+      
+      if (shouldPreserveDelivery && dbDeliveryStatus) {
+        mergedOrder.deliveryStatus = dbDeliveryStatus;
+        mergedOrder.delivery_status = dbDeliveryStatus;
+      }
+      
+      if (shouldPreserveOrder && dbOrderStatus) {
+        mergedOrder.orderStatus = dbOrderStatus;
+        mergedOrder.order_status = dbOrderStatus;
+      }
+      
+      if (shouldPreservePayment && dbPaymentStatus === 'completed') {
+        mergedOrder.paymentStatus = 'completed';
+        mergedOrder.payment_status = 'completed';
+      }
+      
+      return mergedOrder;
+    }));
+    
+    return mergedOrders;
+  } catch (error) {
+    console.error('Error merging preserved offline status:', error);
+    return apiOrders; // Return original orders on error
+  }
+};
+
 export const updateOrder = async (id, updates) => {
   try {
     const db = await openDB();
@@ -296,11 +513,54 @@ export const updateOrder = async (id, updates) => {
           return;
         }
 
+        // Preserve existing status fields if they're more advanced than updates
+        // This prevents overwriting status updates that haven't synced yet
+        const existingDeliveryStatus = order.deliveryStatus || order.delivery_status;
+        const existingOrderStatus = order.orderStatus || order.order_status;
+        const existingPaymentStatus = order.paymentStatus || order.payment_status;
+        const existingOfflineStatusUpdated = order.offlineStatusUpdated;
+        
+        const newDeliveryStatus = updates.deliveryStatus || updates.delivery_status;
+        const newOrderStatus = updates.orderStatus || updates.order_status;
+        const newPaymentStatus = updates.paymentStatus || updates.payment_status;
+        
+        // Status hierarchies for comparison
+        const orderStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'completed'];
+        const deliveryStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+        
+        // If offlineStatusUpdated flag is set, preserve existing statuses unless explicitly overwriting
+        if (existingOfflineStatusUpdated && updates.offlineStatusUpdated !== false) {
+          // Preserve existing deliveryStatus if it's more advanced
+          if (existingDeliveryStatus && existingDeliveryStatus !== 'pending') {
+            if (!newDeliveryStatus || deliveryStatusHierarchy.indexOf(existingDeliveryStatus) >= deliveryStatusHierarchy.indexOf(newDeliveryStatus)) {
+              updates.deliveryStatus = existingDeliveryStatus;
+              updates.delivery_status = existingDeliveryStatus;
+            }
+          }
+          
+          // Preserve existing orderStatus if it's more advanced
+          if (existingOrderStatus && existingOrderStatus !== 'pending') {
+            if (!newOrderStatus || orderStatusHierarchy.indexOf(existingOrderStatus) >= orderStatusHierarchy.indexOf(newOrderStatus)) {
+              updates.orderStatus = existingOrderStatus;
+              updates.order_status = existingOrderStatus;
+            }
+          }
+          
+          // Preserve existing paymentStatus if completed
+          if (existingPaymentStatus === 'completed') {
+            updates.paymentStatus = 'completed';
+            updates.payment_status = 'completed';
+          }
+          
+          // Preserve the flag
+          updates.offlineStatusUpdated = true;
+        }
+
         const updated = {
           ...order,
           ...updates,
           updatedAt: new Date().toISOString(),
-          synced: false // Mark as unsynced when updated
+          synced: order.synced !== false ? order.synced : false // Preserve synced status unless explicitly unsynced
         };
 
         store.put(updated);
@@ -314,20 +574,234 @@ export const updateOrder = async (id, updates) => {
   }
 };
 
+/**
+ * Updates pending operations that reference an offline order ID to use the server ID.
+ * Called when an order is synced to ensure pending operations use the correct server ID.
+ * 
+ * @param {string} offlineId - The offline order ID
+ * @param {string|number} serverOrderId - The server-assigned order ID
+ */
+export const updatePendingOperationsForOrder = async (offlineId, serverOrderId) => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction('pendingOperations', 'readwrite');
+    const store = tx.objectStore('pendingOperations');
+    const index = store.index('status');
+    const request = index.getAll('pending');
+    
+    await new Promise((resolve, reject) => {
+      request.onsuccess = async () => {
+        const operations = request.result || [];
+        let updatedCount = 0;
+        
+        for (const op of operations) {
+          // Check if this operation references the offline ID
+          // Match both the full OFFLINE-xxx ID and the extracted ID (without OFFLINE- prefix)
+          const fullOfflineId = offlineId.startsWith('OFFLINE-') ? offlineId : `OFFLINE-${offlineId}`;
+          const extractedId = offlineId.replace(/^OFFLINE-.*?-/, '').replace(/^OFFLINE-/, '');
+          
+          const endpointContainsOfflineId = op.endpoint && (
+            op.endpoint.includes(fullOfflineId) || 
+            op.endpoint.includes(extractedId) ||
+            op.endpoint.includes(offlineId)
+          );
+          const dataContainsOfflineId = op.data?.offlineId === offlineId || 
+                                       op.data?.offlineId === extractedId ||
+                                       op.data?.id === offlineId ||
+                                       op.offlineId === offlineId ||
+                                       op.offlineId === extractedId;
+          
+          if (endpointContainsOfflineId || dataContainsOfflineId) {
+            // Update the endpoint to use server ID - replace all variations
+            if (op.endpoint) {
+              let updatedEndpoint = op.endpoint;
+              const originalEndpoint = updatedEndpoint;
+              
+              // Replace full OFFLINE- ID
+              if (updatedEndpoint.includes(fullOfflineId)) {
+                updatedEndpoint = updatedEndpoint.replace(new RegExp(fullOfflineId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), serverOrderId);
+              }
+              // Replace extracted ID
+              if (updatedEndpoint.includes(extractedId) && extractedId !== serverOrderId) {
+                updatedEndpoint = updatedEndpoint.replace(new RegExp(extractedId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), serverOrderId);
+              }
+              // Replace any remaining OFFLINE- pattern as fallback
+              if (updatedEndpoint.includes('OFFLINE-')) {
+                updatedEndpoint = updatedEndpoint.replace(/OFFLINE-[^\/]+/, serverOrderId);
+              }
+              
+              op.endpoint = updatedEndpoint;
+            }
+            
+            // Update offlineId in data to server ID for future reference
+            if (op.data) {
+              op.data.offlineId = serverOrderId;
+              op.data.id = serverOrderId;
+            }
+            if (op.offlineId) {
+              op.offlineId = serverOrderId;
+            }
+            
+            // Save the updated operation
+            await store.put(op);
+            updatedCount++;
+          }
+        }
+        
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('[updatePendingOperationsForOrder] Error updating pending operations:', error);
+  }
+};
+
+/**
+ * Marks an order as synced and updates it with server data.
+ * Preserves offline status updates if they are more advanced than server status.
+ * 
+ * @param {string} id - The local order ID (may be offline ID)
+ * @param {Object} serverOrder - The order data from the server
+ */
 export const markOrderSynced = async (id, serverOrder) => {
   try {
+    // CRITICAL: Update all pending operations BEFORE opening the transaction
+    // This prevents transaction conflicts
+    if (serverOrder && id && serverOrder.id && id !== serverOrder.id) {
+      await updatePendingOperationsForOrder(id, serverOrder.id);
+      const extractedId = id.replace(/^OFFLINE-.*?-/, '').replace(/^OFFLINE-/, '');
+      if (extractedId !== id && extractedId !== serverOrder.id) {
+        await updatePendingOperationsForOrder(extractedId, serverOrder.id);
+      }
+    }
+    
     const db = await openDB();
     const tx = db.transaction('orders', 'readwrite');
     const store = tx.objectStore('orders');
     
     // If we have server order data, update with it
     if (serverOrder) {
+      // Try multiple lookup strategies to find the local order (needed to preserve offline status)
+      let localOrder = null;
+      let lookupStrategy = 'direct-id';
+      
+      // Strategy 1: direct lookup with provided id
+      const tryGet = async (lookupId) => {
+        const req = store.get(lookupId);
+        return new Promise((resolve) => {
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      };
+      
+      localOrder = await tryGet(id);
+      
+      // Strategy 2: if not found and id lacks OFFLINE- prefix, try with OFFLINE- prefix
+      if (!localOrder && id && !id.startsWith('OFFLINE-')) {
+        const prefixedId = `OFFLINE-${id}`;
+        localOrder = await tryGet(prefixedId);
+        if (localOrder) lookupStrategy = 'offline-prefixed';
+      }
+      
+      // Strategy 3: if still not found and serverOrder has orderNumber, try by orderNumber index
+      if (!localOrder) {
+        const orderNumber = serverOrder.orderNumber || serverOrder.order_number;
+        if (orderNumber) {
+          lookupStrategy = 'orderNumber';
+          const index = store.index('orderNumber');
+          const req = index.get(orderNumber);
+          localOrder = await new Promise((resolve) => {
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
+          });
+        }
+      }
+      
+      // Strategy 4: if still not found, try serverOrder.id
+      if (!localOrder && serverOrder.id && serverOrder.id !== id) {
+        lookupStrategy = 'server-id';
+        localOrder = await tryGet(serverOrder.id);
+      }
+      
+      
+      const normalizedOrder = { ...serverOrder };
+      // Keep server statuses as-is for delivery; do not auto-upgrade based solely on payment status
+      const serverPaymentStatus = normalizedOrder.paymentStatus || normalizedOrder.payment_status || 'pending';
+      const serverOrderStatus = normalizedOrder.orderStatus || normalizedOrder.order_status || 'pending';
+      const serverDeliveryStatus = normalizedOrder.deliveryStatus || normalizedOrder.delivery_status || 'pending';
+      
+      // Preserve local status updates if they were made offline
+      if (localOrder) {
+        const localData = localOrder.data || localOrder;
+        const localOrderStatus = localData.orderStatus || localData.order_status;
+        const localDeliveryStatus = localData.deliveryStatus || localData.delivery_status;
+        const localPaymentStatus = localData.paymentStatus || localData.payment_status;
+        const offlineStatusUpdated = localData.offlineStatusUpdated;
+        
+        // Status hierarchy for comparison
+        const orderStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'completed'];
+        const deliveryStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+        
+        // Always check if local status is more advanced than server, regardless of offlineStatusUpdated flag
+        // This handles cases where status was updated but flag wasn't set properly
+        
+        // For delivery orders, preserve deliveryStatus if local is more advanced OR if offlineStatusUpdated flag is set
+        // This is critical - if status was updated offline, we MUST preserve it
+        if (localDeliveryStatus && localDeliveryStatus !== 'pending') {
+          const localDeliveryIndex = deliveryStatusHierarchy.indexOf(localDeliveryStatus);
+          const serverDeliveryIndex = serverDeliveryStatus ? deliveryStatusHierarchy.indexOf(serverDeliveryStatus) : -1;
+          
+          // Preserve if:
+          // 1. Local is more advanced than server, OR
+          // 2. Server is pending/undefined, OR
+          // 3. offlineStatusUpdated flag is set (status was explicitly updated offline)
+          if (localDeliveryIndex > serverDeliveryIndex || !serverDeliveryStatus || serverDeliveryStatus === 'pending' || offlineStatusUpdated) {
+            normalizedOrder.deliveryStatus = localDeliveryStatus;
+            normalizedOrder.delivery_status = localDeliveryStatus;
+          }
+        }
+        
+        // Preserve orderStatus if local is more advanced than server OR if offlineStatusUpdated flag is set
+        if (localOrderStatus && localOrderStatus !== 'pending' && localOrderStatus !== serverOrderStatus) {
+          const localIndex = orderStatusHierarchy.indexOf(localOrderStatus);
+          const serverIndex = orderStatusHierarchy.indexOf(serverOrderStatus);
+          
+          // Preserve if local is more advanced OR server is pending OR offlineStatusUpdated flag is set
+          if (localIndex > serverIndex || serverOrderStatus === 'pending' || offlineStatusUpdated) {
+            normalizedOrder.orderStatus = localOrderStatus;
+            normalizedOrder.order_status = localOrderStatus;
+          }
+        }
+        
+        // Preserve paymentStatus if local is completed and server is not
+        if (localPaymentStatus === 'completed' && serverPaymentStatus !== 'completed') {
+          normalizedOrder.paymentStatus = 'completed';
+          normalizedOrder.payment_status = 'completed';
+        }
+        
+        if (offlineStatusUpdated) {
+          normalizedOrder.offlineStatusUpdated = true;
+        }
+      }
+      
+      // CRITICAL: Delete the old offline order (by offline ID) before storing the server order
+      // This prevents duplicate entries and ensures we use the server's ID
+      if (id && id !== normalizedOrder.id) {
+        try {
+          await store.delete(id);
+        } catch (deleteError) {
+          // Silently handle delete errors - order may not exist
+        }
+      }
+      
       await store.put({
-        ...serverOrder,
+        ...normalizedOrder,
         synced: true,
         updatedAt: new Date().toISOString()
       });
     } else {
+      // No server order - just mark local order as synced
       const request = store.get(id);
       request.onsuccess = () => {
         const order = request.result;
@@ -361,7 +835,6 @@ export const cacheMenuItems = async (menuItems) => {
     }
 
     await updateSyncMetadata('menu-items', now);
-    console.log('Menu items cached:', menuItems.length);
   } catch (error) {
     console.error('Error caching menu items:', error);
     throw error;
@@ -402,7 +875,6 @@ export const cacheCategories = async (categories) => {
     }
 
     await updateSyncMetadata('categories', now);
-    console.log('Categories cached:', categories.length);
   } catch (error) {
     console.error('Error caching categories:', error);
     throw error;
@@ -443,7 +915,6 @@ export const cacheCustomers = async (customers) => {
     }
 
     await updateSyncMetadata('customers', now);
-    console.log('Customers cached:', customers.length);
   } catch (error) {
     console.error('Error caching customers:', error);
     throw error;
@@ -467,6 +938,26 @@ export const getCachedCustomers = async () => {
   }
 };
 
+export const saveCustomer = async (customerData) => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction('customers', 'readwrite');
+    const store = tx.objectStore('customers');
+    
+    const customer = {
+      ...customerData,
+      id: customerData.id || `CUSTOMER-${Date.now()}`,
+      lastSynced: customerData.lastSynced || null
+    };
+    
+    await store.put(customer);
+    return customer;
+  } catch (error) {
+    console.error('Error saving customer:', error);
+    throw error;
+  }
+};
+
 // ==================== TABLES ====================
 
 export const cacheTableAvailability = async (occupiedTables) => {
@@ -476,23 +967,34 @@ export const cacheTableAvailability = async (occupiedTables) => {
     const store = tx.objectStore('tables');
 
     const now = new Date().toISOString();
+    // Normalize table numbers - ensure we're comparing numbers
     const occupiedTableNumbers = new Set(
-      occupiedTables.map(t => t.tableNumber || t.table_number)
+      occupiedTables
+        .map(t => {
+          const tableNum = t.tableNumber || t.table_number;
+          return tableNum !== null && tableNum !== undefined ? parseInt(tableNum) : null;
+        })
+        .filter(num => num !== null && num >= 1 && num <= 10)
     );
 
     // Update all tables (1-10)
     for (let i = 1; i <= 10; i++) {
+      const isOccupied = occupiedTableNumbers.has(i);
+      const occupiedTable = occupiedTables.find(t => {
+        const tableNum = t.tableNumber || t.table_number;
+        return tableNum !== null && tableNum !== undefined && parseInt(tableNum) === i;
+      });
+      
       await store.put({
         tableNumber: i,
-        occupied: occupiedTableNumbers.has(i),
-        orderId: occupiedTables.find(t => (t.tableNumber || t.table_number) === i)?.id,
-        orderNumber: occupiedTables.find(t => (t.tableNumber || t.table_number) === i)?.orderNumber,
+        occupied: isOccupied,
+        orderId: occupiedTable?.id || occupiedTable?.orderId || null,
+        orderNumber: occupiedTable?.orderNumber || occupiedTable?.order_number || null,
         lastSynced: now
       });
     }
 
     await updateSyncMetadata('tables', now);
-    console.log('Table availability cached');
   } catch (error) {
     console.error('Error caching table availability:', error);
     throw error;
@@ -513,8 +1015,11 @@ export const getCachedTableAvailability = async () => {
           .filter(t => t.occupied)
           .map(t => ({
             tableNumber: t.tableNumber,
+            table_number: t.tableNumber, // Add both formats for consistency
             id: t.orderId,
-            orderNumber: t.orderNumber
+            orderId: t.orderId, // Add both formats for consistency
+            orderNumber: t.orderNumber,
+            order_number: t.orderNumber // Add both formats for consistency
           }));
         resolve(occupiedTables);
       };
@@ -712,9 +1217,12 @@ export const clearUserSession = async () => {
 
 // ==================== LEGACY SUPPORT (for backward compatibility) ====================
 
-// Keep old functions for backward compatibility
+/**
+ * Legacy function for backward compatibility
+ * @deprecated Use saveOrder instead
+ */
 export const saveOfflineOrder = async (orderData) => {
-  return saveOrder(orderData);
+  return await saveOrder(orderData);
 };
 
 export const getOfflineOrders = async () => {
@@ -725,6 +1233,35 @@ export const getOfflineOrders = async () => {
     timestamp: order.createdAt,
     synced: order.synced || false
   }));
+};
+
+export const getOfflineOrderById = async (orderId) => {
+  try {
+    // Try to get by the orderId directly
+    const order = await getOrderById(orderId);
+    if (order && !order.synced) {
+      return {
+        id: order.id,
+        data: order,
+        timestamp: order.createdAt,
+        synced: order.synced || false
+      };
+    }
+    
+    // If not found, try searching all offline orders
+    const offlineOrders = await getOfflineOrders();
+    const found = offlineOrders.find(o => 
+      o.id === orderId || 
+      o.data?.id === orderId || 
+      String(o.id).includes(String(orderId)) ||
+      String(o.data?.id).includes(String(orderId))
+    );
+    
+    return found || null;
+  } catch (error) {
+    console.error('Error getting offline order by ID:', error);
+    return null;
+  }
 };
 
 export const getOfflineOrdersCount = async () => {
@@ -761,7 +1298,6 @@ export const clearAllOfflineData = async () => {
       await store.clear();
     }
 
-    console.log('All offline data cleared');
   } catch (error) {
     console.error('Error clearing offline data:', error);
     throw error;

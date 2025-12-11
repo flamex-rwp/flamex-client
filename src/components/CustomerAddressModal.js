@@ -36,21 +36,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       const addressData = response.data?.data || response.data || [];
       let addressList = Array.isArray(addressData) ? addressData : [];
 
-      // If customer object has addresses property, merge them (in case API doesn't return all)
-      if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
-        // Merge API addresses with customer.addresses, avoiding duplicates by ID
-        const existingIds = new Set(addressList.map(a => a.id).filter(Boolean));
-        customer.addresses.forEach(addr => {
-          if (addr.id && !existingIds.has(addr.id)) {
-            addressList.push(addr);
-          } else if (!addr.id && !addressList.find(a => a.address === addr.address)) {
-            // If no ID, check by address string
-            addressList.push(addr);
-          }
-        });
-      }
-
-      // If no addresses but customer has legacy address field, use that
+      // If no addresses but customer has legacy address field, use that (online fallback)
       if (addressList.length === 0 && customer.address) {
         addressList = [{
           id: 'legacy',
@@ -105,6 +91,56 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 
     setAdding(true);
     try {
+      const customerIdStr = String(customer.id ?? '');
+      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+
+      if (!navigator.onLine || isOfflineId) {
+        // Offline: create local address and queue sync
+        const newAddr = {
+          id: `OFFLINE-ADDR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          address: newAddress.trim(),
+          isDefault,
+          notes: newAddressNotes.trim() || undefined,
+          customerId: customer.id,
+          offline: true
+        };
+
+        try {
+          const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
+          const cached = await getCachedCustomers();
+          const current = cached.find(c => c.id === customer.id) || customer;
+          const updatedCustomer = {
+            ...current,
+            addresses: [...(current.addresses || []), newAddr]
+          };
+          await saveCustomer(updatedCustomer);
+
+          await addPendingOperation({
+            type: 'update_customer_address',
+            endpoint: `/api/customers/${customer.id}/addresses`,
+            method: 'POST',
+            data: {
+              address: newAddr.address,
+              isDefault: newAddr.isDefault,
+              notes: newAddr.notes
+            },
+            offlineId: customer.id
+          });
+        } catch (offlineErr) {
+          console.warn('Failed to cache offline address:', offlineErr);
+        }
+
+        setAddresses(prev => [...prev, newAddr]);
+        setNewAddress('');
+        setNewAddressNotes('');
+        setIsDefault(false);
+        setShowAddForm(false);
+        showSuccess('Address saved offline. It will sync when back online.');
+        if (onAddressUpdate) onAddressUpdate();
+        return;
+      }
+
+      // Online path
       const response = await customerAPI.createAddress(customer.id, {
         address: newAddress.trim(),
         isDefault: isDefault,
@@ -131,39 +167,115 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
     }
   };
 
-  const handleDeleteAddress = (addressId, addressText) => {
+  const handleDeleteAddress = async (addressId, addressText) => {
+    console.log('[AddressModal] Delete icon clicked (direct)', { addressId, addressText, customerId: customer?.id, online: navigator.onLine });
     if (addressId === 'legacy') {
       showError('Cannot delete legacy address. Please add a new address first.');
       return;
     }
 
-    setConfirmModal({
-      isOpen: true,
-      title: 'Delete Address',
-      message: `Are you sure you want to delete this address?\n\n"${addressText}"\n\nThis action cannot be undone.`,
-      onConfirm: async () => {
-        setDeletingId(addressId);
+    setDeletingId(addressId);
+    try {
+      const customerIdStr = String(customer.id ?? '');
+      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+
+      if (!navigator.onLine || isOfflineId) {
+        // Offline delete: remove locally and queue sync
         try {
-          await customerAPI.deleteAddress(addressId);
-          await loadAddresses();
-          showSuccess('Address deleted successfully');
-          if (onAddressUpdate) {
-            onAddressUpdate();
-          }
-        } catch (err) {
-          console.error('Failed to delete address:', err);
-          showError(err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
-        } finally {
-          setDeletingId(null);
-          setConfirmModal({ ...confirmModal, isOpen: false });
+          const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
+          const cached = await getCachedCustomers();
+          const current = cached.find(c => c.id === customer.id) || customer;
+          const updatedAddresses = (current.addresses || []).filter(a => a.id !== addressId);
+          const updatedCustomer = { ...current, addresses: updatedAddresses };
+          await saveCustomer(updatedCustomer);
+
+          await addPendingOperation({
+            type: 'delete_customer_address',
+            endpoint: `/api/customers/addresses/${addressId}`,
+            method: 'DELETE',
+            data: { customerId: customer.id },
+            offlineId: customer.id
+          });
+          console.log('[AddressModal] Offline delete queued and cached updated', { addressId, customerId: customer.id });
+        } catch (offlineErr) {
+          console.warn('Failed to cache delete address offline:', offlineErr);
+        }
+        setAddresses(prev => prev.filter(a => a.id !== addressId));
+        showSuccess('Address removed offline. It will sync when back online.');
+        if (onAddressUpdate) onAddressUpdate();
+      } else {
+        console.log('[AddressModal] Online delete starting', { addressId, customerId: customer.id });
+        await customerAPI.deleteAddress(addressId);
+        console.log('[AddressModal] Online delete response success', { addressId });
+
+        // Update local state immediately
+        setAddresses(prev => prev.filter(a => a.id !== addressId));
+
+        // Update cached customer for offline use
+        try {
+          const { saveCustomer, getCachedCustomers } = await import('../utils/offlineDB');
+          const cached = await getCachedCustomers();
+          const current = cached.find(c => c.id === customer.id) || customer;
+          const updatedAddresses = (current.addresses || []).filter(a => a.id !== addressId);
+          const updatedCustomer = { ...current, addresses: updatedAddresses };
+          await saveCustomer(updatedCustomer);
+          console.log('[AddressModal] Cached customer updated after online delete', { addressId, customerId: customer.id });
+        } catch (cacheErr) {
+          console.warn('Failed to update cached customer after delete:', cacheErr);
+        }
+
+        // Reload to ensure fresh list from API
+        await loadAddresses();
+        console.log('[AddressModal] Reloaded addresses after delete');
+        showSuccess('Address deleted successfully');
+        if (onAddressUpdate) {
+          onAddressUpdate();
         }
       }
-    });
+    } catch (err) {
+      console.error('Failed to delete address:', err);
+      showError(err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
+    } finally {
+      setDeletingId(null);
+      setConfirmModal({ ...confirmModal, isOpen: false });
+    }
   };
 
   const handleSetDefault = async (addressId) => {
     try {
+      const customerIdStr = String(customer.id ?? '');
+      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+
+      if (!navigator.onLine || isOfflineId) {
+        // Offline set default: update local state and queue sync
+        const updated = addresses.map(addr => ({
+          ...addr,
+          isDefault: addr.id === addressId
+        }));
+        setAddresses(updated);
+        try {
+          const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
+          const cached = await getCachedCustomers();
+          const current = cached.find(c => c.id === customer.id) || customer;
+          const updatedCustomer = { ...current, addresses: updated };
+          await saveCustomer(updatedCustomer);
+          await addPendingOperation({
+            type: 'update_customer_address',
+            endpoint: `/api/customers/addresses/${addressId}`,
+            method: 'PUT',
+            data: { isDefault: true },
+            offlineId: customer.id
+          });
+        } catch (offlineErr) {
+          console.warn('Failed to cache default address change offline:', offlineErr);
+        }
+        showSuccess('Default address updated offline. It will sync when back online.');
+        if (onAddressUpdate) onAddressUpdate();
+        return;
+      }
+
       await customerAPI.updateAddress(addressId, { isDefault: true });
+      console.log('[AddressModal] Online set default success', { addressId, customerId: customer.id });
       await loadAddresses();
       showSuccess('Default address updated');
       if (onAddressUpdate) {
@@ -474,10 +586,16 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         isOpen={confirmModal.isOpen}
         title={confirmModal.title}
         message={confirmModal.message}
-        onConfirm={() => {
-          if (confirmModal.onConfirm) confirmModal.onConfirm();
+        onConfirm={async () => {
+          try {
+            if (confirmModal.onConfirm) {
+              await confirmModal.onConfirm();
+            }
+          } catch (err) {
+            console.error('[AddressModal] Confirm handler error:', err);
+          }
         }}
-        onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+        onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
         variant="danger"
       />
     </>

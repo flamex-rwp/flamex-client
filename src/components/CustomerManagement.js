@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { customerAPI } from '../services/customerAPI';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineModal from './OfflineModal';
 import ConfirmationModal from './ConfirmationModal';
 import CustomerAddressModal from './CustomerAddressModal';
 import './AdminPortal.css';
 
 const CustomerManagement = () => {
   const { showSuccess, showError } = useToast();
+  const { online } = useOffline();
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -244,6 +247,11 @@ const CustomerManagement = () => {
     setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '' });
     setShowCustomerModal(true);
   };
+
+  // Show offline modal if offline
+  if (!online) {
+    return <OfflineModal title="Customer Management - Offline" />;
+  }
 
   return (
     <div className="users-tab">

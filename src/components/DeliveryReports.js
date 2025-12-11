@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { reportsAPI, ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineModal from './OfflineModal';
 
 const formatCurrency = (value) => {
   const amount = Number(value || 0);
@@ -11,6 +13,7 @@ const formatCurrency = (value) => {
 
 const DeliveryReports = () => {
   const { showError } = useToast();
+  const { online } = useOffline();
   const [activeTab, setActiveTab] = useState('overview');
   const [dateFilter, setDateFilter] = useState('today');
   const [startDate, setStartDate] = useState(null);
@@ -76,6 +79,10 @@ const DeliveryReports = () => {
   }, [dateFilter, startDate, endDate]);
 
   const fetchOverview = useCallback(async () => {
+    // Don't fetch if offline
+    if (!online) {
+      return;
+    }
     setLoading(prev => ({ ...prev, overview: true }));
     setError('');
     try {
@@ -85,15 +92,23 @@ const DeliveryReports = () => {
       const reportData = response.data.data || response.data || {};
       setOverview(reportData);
     } catch (err) {
+      // Don't show error if offline
+      if (!online) {
+        return;
+      }
       console.error('Failed to load overview report', err);
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load overview report');
       showError(err.response?.data?.error || err.response?.data?.message || 'Failed to load overview report');
     } finally {
       setLoading(prev => ({ ...prev, overview: false }));
     }
-  }, [getDateRange, showError]);
+  }, [getDateRange, showError, online]);
 
   const fetchDeliveryStats = useCallback(async () => {
+    // Don't fetch if offline
+    if (!online) {
+      return;
+    }
     setLoading(prev => ({ ...prev, stats: true }));
     try {
       const params = { filter: dateFilter };
@@ -118,6 +133,10 @@ const DeliveryReports = () => {
         average_order_value: statsData.average_order_value || 0
       });
     } catch (err) {
+      // Don't show error if offline
+      if (!online) {
+        return;
+      }
       console.error('Failed to load delivery stats', err);
       // Use default stats on error
       setDeliveryStats({
@@ -135,9 +154,13 @@ const DeliveryReports = () => {
     } finally {
       setLoading(prev => ({ ...prev, stats: false }));
     }
-  }, [dateFilter, startDate, endDate]);
+  }, [dateFilter, startDate, endDate, online]);
 
   const fetchAreas = useCallback(async () => {
+    // Don't fetch if offline
+    if (!online) {
+      return;
+    }
     setLoading(prev => ({ ...prev, areas: true }));
     setError('');
     try {
@@ -147,14 +170,22 @@ const DeliveryReports = () => {
       const areasData = response.data.data || response.data || [];
       setAreas(Array.isArray(areasData) ? areasData : []);
     } catch (err) {
+      // Don't show error if offline
+      if (!online) {
+        return;
+      }
       console.error('Failed to load area analysis', err);
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load area analysis');
     } finally {
       setLoading(prev => ({ ...prev, areas: false }));
     }
-  }, [getDateRange]);
+  }, [getDateRange, online]);
 
   const fetchCodOrders = useCallback(async (statusOverride) => {
+    // Don't fetch if offline
+    if (!online) {
+      return;
+    }
     const status = statusOverride || codStatus;
     setLoading(prev => ({ ...prev, cod: true }));
     setError('');
@@ -170,15 +201,23 @@ const DeliveryReports = () => {
       setCodOrders(codData);
       setSelectedCod([]);
     } catch (err) {
+      // Don't show error if offline
+      if (!online) {
+        return;
+      }
       console.error('Failed to load COD list', err);
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load COD list');
     } finally {
       setLoading(prev => ({ ...prev, cod: false }));
     }
-  }, [codStatus, getDateRange]);
+  }, [codStatus, getDateRange, online]);
 
   // Fetch data when tab or date filter changes
   useEffect(() => {
+    // Don't fetch if offline
+    if (!online) {
+      return;
+    }
     fetchOverview();
     fetchDeliveryStats();
     if (activeTab === 'areas') {
@@ -186,7 +225,7 @@ const DeliveryReports = () => {
     } else if (activeTab === 'cod') {
       fetchCodOrders();
     }
-  }, [activeTab, dateFilter, startDate, endDate, fetchOverview, fetchDeliveryStats, fetchAreas, fetchCodOrders]);
+  }, [activeTab, dateFilter, startDate, endDate, fetchOverview, fetchDeliveryStats, fetchAreas, fetchCodOrders, online]);
 
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
@@ -256,6 +295,11 @@ const DeliveryReports = () => {
   };
 
   const trendData = overview?.trend || [];
+
+  // Show offline modal if offline
+  if (!online) {
+    return <OfflineModal title="Delivery Reports - Offline" />;
+  }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>

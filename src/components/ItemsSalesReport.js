@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ordersAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineModal from './OfflineModal';
 import dayjs from 'dayjs';
 import jsPDF from 'jspdf';
 
@@ -12,6 +14,7 @@ const formatCurrency = (value) => {
 
 const ItemsSalesReport = () => {
   const { showSuccess, showError } = useToast();
+  const { online } = useOffline();
   const [itemsSales, setItemsSales] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -252,6 +255,11 @@ const ItemsSalesReport = () => {
       showError('Failed to export PDF. Please try again.');
     }
   };
+
+  // Show offline modal if offline
+  if (!online) {
+    return <OfflineModal title="Items Sales Report - Offline" />;
+  }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>

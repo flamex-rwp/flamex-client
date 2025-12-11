@@ -23,9 +23,17 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
     }
   };
 
-  const handleConfirm = () => {
-    onConfirm();
-    onClose();
+  const handleConfirm = async () => {
+    try {
+      if (onConfirm) {
+        await onConfirm();
+      }
+    } catch (err) {
+      console.error('[ConfirmationModal] Confirm handler error:', err);
+    }
+    if (onClose) {
+      onClose();
+    }
   };
 
   const buttonStyles = {

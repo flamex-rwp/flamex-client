@@ -86,7 +86,13 @@ export const syncOfflineOrders = async () => {
 
         if (response.status === 201 || response.status === 200) {
           // Mark order as synced instead of deleting (keep for records)
-          await markOrderSynced(order.id);
+          // CRITICAL: Pass the server order response to markOrderSynced so it can update pending operations
+          const serverOrder = response.data?.data || response.data;
+          if (serverOrder) {
+            await markOrderSynced(order.id, serverOrder);
+          } else {
+            await markOrderSynced(order.id);
+          }
           syncedCount++;
           console.log(`Order ${order.id} synced successfully`);
         } else {
@@ -109,6 +115,7 @@ export const syncOfflineOrders = async () => {
         if (isTableOccupied) {
           // Table is occupied - mark this order as synced to prevent retrying
           // This is a valid backend rejection, not a sync failure
+          // Note: No server order data available, so just mark as synced without updating operations
           await markOrderSynced(order.id);
           console.warn(`⚠️ Order ${order.id} rejected: ${errorMessage}`);
           console.warn(`   This order will not be retried. Table may have been reused.`);

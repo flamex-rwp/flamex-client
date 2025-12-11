@@ -187,19 +187,47 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
         
         if (expenses.length > 0) {
           // Apply query params filtering if needed
-          const urlObj = new URL(url.startsWith('http') ? url : `http://localhost${url}`, window.location.origin);
-          const startDate = urlObj.searchParams.get('startDate');
-          const endDate = urlObj.searchParams.get('endDate');
-          const filter = urlObj.searchParams.get('filter');
+          // Parse params from both URL and params object
+          let startDate, endDate, filter;
+          
+          try {
+            const urlObj = new URL(url.startsWith('http') ? url : `http://localhost${url}`, window.location.origin);
+            // Check both URL params and params object (params object takes precedence)
+            startDate = params.start || params.startDate || urlObj.searchParams.get('start') || urlObj.searchParams.get('startDate');
+            endDate = params.end || params.endDate || urlObj.searchParams.get('end') || urlObj.searchParams.get('endDate');
+            filter = params.filter || urlObj.searchParams.get('filter');
+          } catch (e) {
+            // If URL parsing fails, use params object directly
+            startDate = params.start || params.startDate;
+            endDate = params.end || params.endDate;
+            filter = params.filter;
+          }
+          
+          // Helper function to get expense date from various possible fields
+          const getExpenseDate = (exp) => {
+            // Try all possible date fields in order of preference
+            const dateField = exp.expense_date || exp.expenseDate || exp.date || exp.createdAt || exp.created_at;
+            if (!dateField) return null;
+            
+            try {
+              const date = new Date(dateField);
+              if (isNaN(date.getTime())) return null;
+              return date.toISOString().split('T')[0]; // Return YYYY-MM-DD format
+            } catch (e) {
+              return null;
+            }
+          };
           
           let filtered = expenses;
+          
+          // Apply date range filter (custom range)
           if (startDate || endDate) {
             filtered = expenses.filter(exp => {
-              const expDate = exp.date || exp.createdAt || exp.created_at;
-              if (!expDate) return false;
-              const date = new Date(expDate).toISOString().split('T')[0];
-              if (startDate && date < startDate) return false;
-              if (endDate && date > endDate) return false;
+              const expDateStr = getExpenseDate(exp);
+              if (!expDateStr) return false;
+              
+              if (startDate && expDateStr < startDate) return false;
+              if (endDate && expDateStr > endDate) return false;
               return true;
             });
           } else if (filter) {
@@ -218,6 +246,7 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
             } else if (filter === 'this_week' || filter === 'this week') {
               const weekStart = new Date(now);
               weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+              weekStart.setHours(0, 0, 0, 0);
               filterStartDate = weekStart.toISOString().split('T')[0];
               filterEndDate = now.toISOString().split('T')[0];
             } else if (filter === 'this_month' || filter === 'this month') {
@@ -227,20 +256,30 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
             
             if (filterStartDate && filterEndDate) {
               filtered = expenses.filter(exp => {
-                const expDate = exp.date || exp.createdAt || exp.created_at;
-                if (!expDate) return false;
-                const date = new Date(expDate).toISOString().split('T')[0];
-                return date >= filterStartDate && date <= filterEndDate;
+                const expDateStr = getExpenseDate(exp);
+                if (!expDateStr) return false;
+                return expDateStr >= filterStartDate && expDateStr <= filterEndDate;
               });
             }
           }
           
-          if (filtered.length > 0) {
-            console.log(`[CacheService] Cache HIT (expenses store): ${method} ${url}`);
+          // Sort by date descending (newest first) to match API behavior
+          filtered.sort((a, b) => {
+            const dateA = getExpenseDate(a);
+            const dateB = getExpenseDate(b);
+            if (!dateA || !dateB) return 0;
+            return dateB.localeCompare(dateA); // Descending order
+          });
+          
+          // Return filtered results even if empty (means we have data but filter matched nothing)
+          // Only fall through if we have no expenses in store at all
+          if (expenses.length > 0) {
+            console.log(`[CacheService] Cache HIT (expenses store): ${method} ${url} - Found ${filtered.length} expenses (filtered from ${expenses.length})`);
+            // Return in the same format as the API response, even if filtered array is empty
             return { data: { expenses: filtered } };
           }
         }
-        // Fall through to api-responses check if no expenses found
+        // Fall through to api-responses check if no expenses found in store
       } catch (error) {
         console.error('[CacheService] Error getting cached expenses:', error);
         // Fall through to api-responses check
@@ -278,8 +317,97 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
               const entry = cursor.value;
               // Check if URL path matches (ignore query params for fallback)
               if (entry.url && entry.url.split('?')[0] === urlPath && entry.method === method) {
+                let cachedData = entry.data;
+                
+                // For expenses, apply filtering if params differ from cached params
+                if (resourceType === 'expenses' && cachedData) {
+                  const expenses = cachedData.data?.expenses || cachedData.expenses || cachedData || [];
+                  if (Array.isArray(expenses) && expenses.length > 0) {
+                    // Parse current request params
+                    let startDate, endDate, filter;
+                    try {
+                      const urlObj = new URL(url.startsWith('http') ? url : `http://localhost${url}`, window.location.origin);
+                      startDate = params.start || params.startDate || urlObj.searchParams.get('start') || urlObj.searchParams.get('startDate');
+                      endDate = params.end || params.endDate || urlObj.searchParams.get('end') || urlObj.searchParams.get('endDate');
+                      filter = params.filter || urlObj.searchParams.get('filter');
+                    } catch (e) {
+                      startDate = params.start || params.startDate;
+                      endDate = params.end || params.endDate;
+                      filter = params.filter;
+                    }
+                    
+                    // Apply filtering if params are present
+                    if (startDate || endDate || filter) {
+                      const getExpenseDate = (exp) => {
+                        const dateField = exp.expense_date || exp.expenseDate || exp.date || exp.createdAt || exp.created_at;
+                        if (!dateField) return null;
+                        try {
+                          const date = new Date(dateField);
+                          if (isNaN(date.getTime())) return null;
+                          return date.toISOString().split('T')[0];
+                        } catch (e) {
+                          return null;
+                        }
+                      };
+                      
+                      let filtered = expenses;
+                      
+                      if (startDate || endDate) {
+                        filtered = expenses.filter(exp => {
+                          const expDateStr = getExpenseDate(exp);
+                          if (!expDateStr) return false;
+                          if (startDate && expDateStr < startDate) return false;
+                          if (endDate && expDateStr > endDate) return false;
+                          return true;
+                        });
+                      } else if (filter) {
+                        const now = new Date();
+                        let filterStartDate, filterEndDate;
+                        
+                        if (filter === 'today') {
+                          filterStartDate = now.toISOString().split('T')[0];
+                          filterEndDate = filterStartDate;
+                        } else if (filter === 'yesterday') {
+                          const yesterday = new Date(now);
+                          yesterday.setDate(yesterday.getDate() - 1);
+                          filterStartDate = yesterday.toISOString().split('T')[0];
+                          filterEndDate = filterStartDate;
+                        } else if (filter === 'this_week' || filter === 'this week') {
+                          const weekStart = new Date(now);
+                          weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+                          weekStart.setHours(0, 0, 0, 0);
+                          filterStartDate = weekStart.toISOString().split('T')[0];
+                          filterEndDate = now.toISOString().split('T')[0];
+                        } else if (filter === 'this_month' || filter === 'this month') {
+                          filterStartDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+                          filterEndDate = now.toISOString().split('T')[0];
+                        }
+                        
+                        if (filterStartDate && filterEndDate) {
+                          filtered = expenses.filter(exp => {
+                            const expDateStr = getExpenseDate(exp);
+                            if (!expDateStr) return false;
+                            return expDateStr >= filterStartDate && expDateStr <= filterEndDate;
+                          });
+                        }
+                      }
+                      
+                      // Sort by date descending
+                      filtered.sort((a, b) => {
+                        const dateA = getExpenseDate(a);
+                        const dateB = getExpenseDate(b);
+                        if (!dateA || !dateB) return 0;
+                        return dateB.localeCompare(dateA);
+                      });
+                      
+                      cachedData = { data: { expenses: filtered } };
+                      console.log(`[CacheService] ✅ Cache HIT (fallback with filtering): ${method} ${url} - Found ${filtered.length} expenses`);
+                    }
+                  }
+                }
+                
                 console.log(`[CacheService] ✅ Cache HIT (fallback): ${method} ${url} (found: ${entry.url})`);
-                resolve(entry.data);
+                resolve(cachedData);
                 foundMatch = true;
                 return;
               }

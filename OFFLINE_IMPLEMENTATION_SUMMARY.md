@@ -201,3 +201,4 @@ broadcastOrderCreated(order); // Notifies all tabs
 7. **Scalable** - Clean architecture, easy to extend
 
 
+

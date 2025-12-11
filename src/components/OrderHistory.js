@@ -3,6 +3,8 @@ import { ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineModal from './OfflineModal';
 import jsPDF from 'jspdf';
 import { printReceipt } from './Receipt';
 
@@ -16,6 +18,7 @@ const formatCurrency = (value) => {
 
 const OrderHistory = () => {
   const { showSuccess, showError } = useToast();
+  const { online } = useOffline();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -311,6 +314,59 @@ const OrderHistory = () => {
         return sum + (itemPrice * itemQty);
       }, 0);
 
+      const deliveryCharge = parseFloat(fullOrder.delivery_charge || 0);
+      
+      // Get discount percentage from order - check multiple possible field names
+      let discountPercent = parseFloat(
+        fullOrder.discount_percent || 
+        fullOrder.discountPercent || 
+        fullOrder.discount_percentage ||
+        order.discount_percent || 
+        order.discountPercent || 
+        order.discount_percentage ||
+        0
+      );
+      
+      // If discount_percent is not available but total_amount suggests a discount, calculate it
+      const apiTotalAmount = parseFloat(fullOrder.total_amount || fullOrder.totalAmount || 0);
+      const expectedTotalWithoutDiscount = subtotal + deliveryCharge;
+      
+      if (discountPercent === 0 && apiTotalAmount > 0 && apiTotalAmount < expectedTotalWithoutDiscount) {
+        // Calculate discount percentage from the difference
+        const actualDiscount = expectedTotalWithoutDiscount - apiTotalAmount;
+        if (actualDiscount > 0 && subtotal > 0) {
+          discountPercent = (actualDiscount / subtotal) * 100;
+        }
+      }
+      
+      // Calculate discount amount and subtotal after discount
+      const discountAmount = discountPercent > 0 ? (subtotal * discountPercent / 100) : 0;
+      const subtotalAfterDiscount = subtotal - discountAmount;
+      
+      // Recalculate total amount: subtotal after discount + delivery charge
+      // Use API total_amount only if it matches our calculation (within 1 PKR tolerance)
+      const calculatedTotal = subtotalAfterDiscount + deliveryCharge;
+      const totalAmount = (Math.abs(apiTotalAmount - calculatedTotal) <= 1) ? apiTotalAmount : calculatedTotal;
+
+      // Debug: Log API values to help identify if discount_percent is missing from API
+      if (discountPercent > 0 || apiTotalAmount !== calculatedTotal) {
+        console.log('[Receipt Debug] Order values from API:', {
+          orderId: fullOrder.id,
+          orderNumber: fullOrder.order_number,
+          apiTotalAmount,
+          calculatedTotal,
+          subtotal,
+          deliveryCharge,
+          discountPercent,
+          discountAmount,
+          'fullOrder.discount_percent': fullOrder.discount_percent,
+          'fullOrder.discountPercent': fullOrder.discountPercent,
+          'fullOrder.discount_percentage': fullOrder.discount_percentage,
+          'order.discount_percent': order.discount_percent,
+          'order.discountPercent': order.discountPercent
+        });
+      }
+
       // Extract customer information from nested customer object or order fields
       const customer = fullOrder.customer || null;
       const customerName = customer?.name || fullOrder.customer_name || order.customer_name || null;
@@ -331,8 +387,10 @@ const OrderHistory = () => {
           price: parseFloat(item.price || item.item_price || 0)
         })).filter(item => item.name && item.name !== 'Unknown Item' && item.quantity > 0),
         subtotal: subtotal,
-        total_amount: parseFloat(fullOrder.total_amount) || subtotal,
-        delivery_charge: parseFloat(fullOrder.delivery_charge || 0),
+        total_amount: totalAmount,
+        discount_percent: discountPercent,
+        discountPercent: discountPercent,
+        delivery_charge: deliveryCharge,
         payment_method: fullOrder.payment_method || order.payment_method || 'cash',
         amount_taken: fullOrder.amount_taken ? parseFloat(fullOrder.amount_taken) : null,
         return_amount: fullOrder.return_amount ? parseFloat(fullOrder.return_amount) : null,
@@ -352,12 +410,6 @@ const OrderHistory = () => {
         setGeneratingReceiptId(null);
         return;
       }
-
-      console.log('Receipt data prepared:', receiptDataForPrint);
-      console.log('Items count:', receiptDataForPrint.items.length);
-      console.log('Items:', receiptDataForPrint.items);
-      console.log('Full order:', fullOrder);
-      console.log('Order items from API:', orderItems);
 
       // Validate items array one more time
       if (!receiptDataForPrint.items || receiptDataForPrint.items.length === 0) {
@@ -570,6 +622,11 @@ const OrderHistory = () => {
       showError('Failed to export PDF. Please try again.');
     }
   };
+
+  // Show offline modal if offline
+  if (!online) {
+    return <OfflineModal title="Order History - Offline" />;
+  }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
@@ -1426,6 +1483,18 @@ const OrderHistory = () => {
                           const amountTaken = orderDetails.order.amountTaken || orderDetails.order.amount_taken;
                           const returnAmount = orderDetails.order.returnAmount || orderDetails.order.return_amount;
                           const totalAmount = orderDetails.order.totalAmount || orderDetails.order.total_amount || 0;
+                          const subtotalAmount = orderDetails.order.subtotal || 0;
+                          const discountPercent =
+                            orderDetails.order.discount_percent ||
+                            orderDetails.order.discountPercent ||
+                            0;
+                          const discountAmount = discountPercent > 0 ? (subtotalAmount * discountPercent / 100) : 0;
+                          const deliveryCharge =
+                            orderDetails.order.deliveryCharge ||
+                            orderDetails.order.delivery_charge ||
+                            0;
+                          const calculatedTotal = (subtotalAmount - discountAmount) + Number(deliveryCharge || 0);
+                          const displayTotal = totalAmount || calculatedTotal;
                           
                           return (
                             <>
@@ -1437,7 +1506,10 @@ const OrderHistory = () => {
                               {returnAmount && (
                                 <div>Return Amount: {formatCurrency(returnAmount)}</div>
                               )}
-                              <div>Total Amount: {formatCurrency(totalAmount)}</div>
+                              <div>Discount: {discountPercent}% ({formatCurrency(discountAmount)})</div>
+                              <div>Delivery Charge: {formatCurrency(deliveryCharge)}</div>
+                              <div>Subtotal: {formatCurrency(subtotalAmount)}</div>
+                              <div>Total Amount: {formatCurrency(displayTotal)}</div>
                             </>
                           );
                         })()}

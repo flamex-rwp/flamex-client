@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { expensesAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
+import OfflineModal from './OfflineModal';
 import ConfirmationModal from './ConfirmationModal';
 import dayjs from 'dayjs';
 import jsPDF from 'jspdf';
@@ -13,6 +15,7 @@ const formatCurrency = (value) => {
 
 const ExpenseHistory = ({ readOnly = false }) => {
   const { showSuccess, showError } = useToast();
+  const { online } = useOffline();
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -75,13 +78,27 @@ const ExpenseHistory = ({ readOnly = false }) => {
       setExpenses(sortedExpenses);
     } catch (err) {
       console.error('Failed to load expenses', err);
-      // Don't show error for network errors when offline - cache should handle it
-      if (err.response) {
+      // Check if this was a cached response that failed to parse
+      if (err.isCached) {
+        // Cached response should have been handled, but if we're here, there might be a format issue
+        const responseData = err.data?.data || err.data;
+        const expensesData = responseData?.expenses || responseData;
+        const expensesArray = Array.isArray(expensesData) ? expensesData : [];
+        setExpenses(expensesArray);
+        setError('');
+      } else if (err.response) {
+        // Server returned an error response
         setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load expenses');
       } else {
-        // Network error - cache should have handled it, set empty data gracefully
+        // Network error - check if we have any cached data to show
+        // The cache should have been served by the API interceptor, but if we're here, no cache was available
         setExpenses([]);
-        setError(''); // Clear error for network issues
+        // Only show error if we're online (offline is expected, online means server issue)
+        if (navigator.onLine) {
+          setError('Failed to load expenses. Please check your connection.');
+        } else {
+          setError('No cached expenses available. Please connect to the internet to load expenses.');
+        }
       }
     } finally {
       setLoading(false);
@@ -462,6 +479,11 @@ const ExpenseHistory = ({ readOnly = false }) => {
       showError(errorMsg);
     }
   };
+
+  // Show offline modal if offline
+  if (!online) {
+    return <OfflineModal title="Expense History - Offline" />;
+  }
 
   if (loading) {
     return (
