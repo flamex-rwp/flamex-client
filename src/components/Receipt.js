@@ -52,7 +52,7 @@ export const printReceipt = (orderData, printStage) => {
             height: auto !important;
             font-family: 'Courier New', monospace !important;
             font-size: 13px !important; /* INCREASED from 11px */
-            font-weight: bold !important;
+            font-weight: 500 !important;
             line-height: 1.1 !important;
             -webkit-print-color-adjust: exact !important;
             color: #000000 !important;
@@ -69,7 +69,7 @@ export const printReceipt = (orderData, printStage) => {
             padding: 0.5mm 1mm 2mm 1mm !important; /* Minimal top padding */
             font-family: 'Courier New', monospace !important;
             font-size: 13px !important; /* INCREASED from 11px */
-            font-weight: bold !important;
+            font-weight: 500 !important;
             line-height: 1.1 !important;
             color: #000000 !important;
             background: #ffffff !important;
@@ -95,10 +95,19 @@ export const printReceipt = (orderData, printStage) => {
           }
         
         .header-text {
-          font-size: 16px !important; /* INCREASED from 13px */
-          font-weight: bolder !important;
-          margin: 2px 0 !important; /* Reduced margin */
+          font-size: 14px !important;
+          font-weight: 600 !important;
+          margin: 4px 0 !important;
           text-align: center !important;
+          width: 100% !important;
+          box-sizing: border-box !important;
+        }
+        
+        .header-text-left {
+          font-size: 14px !important;
+          font-weight: 600 !important;
+          margin: 4px 0 !important;
+          text-align: left !important;
           width: 100% !important;
           box-sizing: border-box !important;
         }
@@ -111,12 +120,13 @@ export const printReceipt = (orderData, printStage) => {
           word-wrap: break-word !important;
           overflow-wrap: break-word !important;
           font-size: 13px !important; /* INCREASED */
+          font-weight: 500 !important;
         }
         
-        /* Horizontal lines - thicker for better visibility */
+        /* Horizontal lines - thin style */
         hr {
           border: none !important;
-          border-top: 1.5px solid #000 !important;
+          border-top: 0.5px solid #000 !important;
           margin: 5px 0 !important;
           width: 100% !important;
           box-sizing: border-box !important;
@@ -134,14 +144,15 @@ export const printReceipt = (orderData, printStage) => {
         }
         
         td, th {
-          padding: 2px 0 !important; /* Reduced padding */
-          font-size: 12px !important; /* INCREASED from 10px */
-          font-weight: bold !important;
+          padding: 2px 0 !important;
+          font-size: 12px !important;
+          font-weight: 500 !important;
           line-height: 1.1 !important;
           vertical-align: top !important;
           box-sizing: border-box !important;
-          word-wrap: break-word !important;
-          overflow-wrap: break-word !important;
+          word-wrap: normal !important;
+          overflow-wrap: normal !important;
+          word-break: keep-all !important;
           hyphens: auto !important;
         }
         
@@ -194,6 +205,33 @@ export const printReceipt = (orderData, printStage) => {
           box-sizing: border-box !important;
         }
         
+        /* Logo styling */
+        .logo-container {
+          text-align: center !important;
+          width: 100% !important;
+          margin: 2px 0 3px 0 !important;
+          box-sizing: border-box !important;
+        }
+        
+        .welcome-text {
+          font-size: 14px !important;
+          font-weight: 500 !important;
+          margin: 2px 0 !important;
+          text-align: center !important;
+          width: 100% !important;
+          box-sizing: border-box !important;
+        }
+        
+        .logo-image {
+          max-width: 100% !important;
+          width: auto !important;
+          height: auto !important;
+          max-height: 25mm !important;
+          display: block !important;
+          margin: 3px auto !important;
+          box-sizing: border-box !important;
+        }
+        
         /* ASCII art - larger */
         .ascii-art {
           font-family: monospace !important;
@@ -217,6 +255,7 @@ export const printReceipt = (orderData, printStage) => {
         .order-info td {
           font-size: 12px !important;
           padding: 1px 0 !important;
+          font-weight: 500 !important;
         }
       }
       
@@ -241,9 +280,9 @@ export const printReceipt = (orderData, printStage) => {
           border: 1px solid #ddd;
           box-shadow: 0 4px 12px rgba(0,0,0,0.1);
           font-family: 'Courier New', monospace;
-          font-size: 15px;
-          font-weight: bold;
-          line-height: 1.5;
+          font-size: 13px;
+          font-weight: 500;
+          line-height: 1.1;
           box-sizing: border-box;
           border-radius: 4px;
           color: #000000;
@@ -252,39 +291,69 @@ export const printReceipt = (orderData, printStage) => {
           margin-top: 0 !important;
         }
         .receipt-container .header-text {
-          font-size: 20px;
-          font-weight: 900;
-          margin: 6px 0;
+          font-size: 14px;
+          font-weight: 600;
+          margin: 4px 0;
+          text-align: center;
+          color: #000000;
+        }
+        .receipt-container .header-text-left {
+          font-size: 14px;
+          font-weight: 600;
+          margin: 4px 0;
+          text-align: left;
           color: #000000;
         }
         .receipt-container .center-text {
-          margin: 5px 0;
-          font-size: 15px;
-          font-weight: bold;
+          margin: 2px 0;
+          font-size: 13px;
+          font-weight: 500;
           color: #000000;
         }
         .receipt-container hr {
-          margin: 8px 0;
-          border-top-width: 2px;
+          margin: 5px 0;
+          border-top-width: 0.5px;
           border-top-color: #000000;
         }
         .receipt-container table {
-          margin: 8px 0;
+          margin: 4px 0;
         }
         .receipt-container td, .receipt-container th {
-          padding: 6px 8px;
-          font-size: 14px;
-          line-height: 1.5;
-          font-weight: bold;
+          padding: 2px 0;
+          font-size: 12px;
+          line-height: 1.1;
+          font-weight: 500;
+          word-wrap: break-word;
+          overflow-wrap: break-word;
           color: #000000;
         }
         .receipt-container .ascii-art {
-          font-size: 13px;
-          margin: 8px 0;
+          font-size: 11px;
+          margin: 4px 0;
           color: #000000;
         }
+        .receipt-container .logo-container {
+          text-align: center;
+          width: 100%;
+          margin: 2px 0 3px 0;
+        }
+        .receipt-container .welcome-text {
+          font-size: 14px;
+          font-weight: 500;
+          margin: 2px 0;
+          text-align: center;
+          color: #000000;
+        }
+        .receipt-container .logo-image {
+          max-width: 100%;
+          width: auto;
+          height: auto;
+          max-height: 60px;
+          display: block;
+          margin: 3px auto;
+        }
         .receipt-container .spacer {
-          height: 4px;
+          height: 2px;
         }
       }
     </style>
@@ -293,24 +362,67 @@ export const printReceipt = (orderData, printStage) => {
     ${htmlReceipt}
     <script>
       window.onload = function() {
-        // Focus and print immediately
-        window.focus();
-        setTimeout(function() {
-          window.print();
-          // Listen for afterprint event to close window and resolve promise
-          var printCompleted = false;
-          var closeWindow = function() {
-            if (!printCompleted) {
-              printCompleted = true;
-              setTimeout(function() {
-                window.close();
-              }, 500);
+        // Wait for all images to load before printing
+        var images = document.getElementsByTagName('img');
+        var imagesToLoad = images.length;
+        var imagesLoaded = 0;
+        
+        if (imagesToLoad === 0) {
+          // No images, proceed with print
+          printReceipt();
+        } else {
+          // Wait for all images to load
+          for (var i = 0; i < images.length; i++) {
+            if (images[i].complete) {
+              imagesLoaded++;
+            } else {
+              images[i].onload = function() {
+                imagesLoaded++;
+                if (imagesLoaded === imagesToLoad) {
+                  printReceipt();
+                }
+              };
+              images[i].onerror = function() {
+                imagesLoaded++;
+                if (imagesLoaded === imagesToLoad) {
+                  printReceipt();
+                }
+              };
             }
-          };
-          window.addEventListener('afterprint', closeWindow);
-          // Fallback: close after timeout if afterprint doesn't fire
-          setTimeout(closeWindow, 2000);
-        }, 50);
+          }
+          
+          // If all images were already loaded
+          if (imagesLoaded === imagesToLoad) {
+            printReceipt();
+          }
+          
+          // Fallback timeout in case images don't load
+          setTimeout(function() {
+            if (imagesLoaded < imagesToLoad) {
+              printReceipt();
+            }
+          }, 2000);
+        }
+        
+        function printReceipt() {
+          window.focus();
+          setTimeout(function() {
+            window.print();
+            // Listen for afterprint event to close window and resolve promise
+            var printCompleted = false;
+            var closeWindow = function() {
+              if (!printCompleted) {
+                printCompleted = true;
+                setTimeout(function() {
+                  window.close();
+                }, 500);
+              }
+            };
+            window.addEventListener('afterprint', closeWindow);
+            // Fallback: close after timeout if afterprint doesn't fire
+            setTimeout(closeWindow, 2000);
+          }, 100);
+        }
       };
     </script>
   </body>
@@ -328,6 +440,8 @@ export const printReceipt = (orderData, printStage) => {
 
 // Generate HTML receipt
 const generateHTMLReceipt = (orderData, printStage) => {
+  // Get the origin for image paths
+  const origin = window.location.origin;
   const {
     items = [],
     total_amount,
@@ -408,16 +522,16 @@ const generateHTMLReceipt = (orderData, printStage) => {
   if (printStage === 'customer') {
     html = `
       <div class="receipt-container">
-        <!-- HEADER - NO EXTRA SPACE -->
-        <div class="header-text">FLAMEX</div>
-        <div class="center-text">Shally Vallay Chock</div>
-        <div class="center-text">Main Range Road</div>
-        <div class="center-text">Tel: 0330-7072222</div>
-        <hr>
+        <!-- LOGO SECTION -->
+        <div class="logo-container">
+          <img src="${origin}/b-logo.png" alt="Logo" class="logo-image" />
+          <div class="center-text">Shally Vallay Chock</div>
+        </div>
+        <div class="center-text">---------------------------------</div>
         
         <!-- RECEIPT TITLE -->
         <div class="header-text">CUSTOMER RECEIPT</div>
-        <hr>
+        <div class="center-text">---------------------------------</div>
         
         <!-- ORDER INFO - Compact layout -->
         <table class="order-info">
@@ -444,9 +558,8 @@ const generateHTMLReceipt = (orderData, printStage) => {
         </table>
 
         ${(customer_name || customer_phone || customer_address || delivery_notes) ? `
-          <hr>
           <!-- CUSTOMER & DELIVERY INFO - Show when available -->
-          <div class="header-text">${isDelivery ? 'DELIVERY DETAILS' : 'CUSTOMER INFORMATION'}</div>
+          <div class="header-text-left">${isDelivery ? 'DELIVERY DETAILS' : 'CUSTOMER INFORMATION'}</div>
           <table class="order-info">
             <tbody>
               ${customer_name ? `
@@ -475,10 +588,8 @@ const generateHTMLReceipt = (orderData, printStage) => {
           </table>
           ` : ''}
         
-        <hr>
-        
         <!-- ITEMS HEADER -->
-        <div class="header-text">ORDER ITEMS</div>
+        <div class="header-text-left">ORDER ITEMS</div>
         <table>
           <thead>
             <tr>
@@ -506,10 +617,9 @@ const generateHTMLReceipt = (orderData, printStage) => {
           </tbody>
         </table>
         
-        <hr>
-        
         <!-- TOTALS - Prominent display -->
-        <div class="header-text">TOTAL AMOUNT</div>
+        
+        <div class="center-text">---------------------------------</div>
         <table class="order-info">
           <tr>
             <td class="col-item">Subtotal:</td>
@@ -528,8 +638,8 @@ const generateHTMLReceipt = (orderData, printStage) => {
           </tr>
           ` : ''}
           <tr>
-            <td class="col-item" style="font-size: 13px !important;"><strong>GRAND TOTAL:</strong></td>
-            <td class="col-price" style="font-size: 13px !important;"><strong>${formatCurrency(total)}</strong></td>
+            <td class="col-item" style="font-size: 13px !important; font-weight: 600 !important;">GRAND TOTAL:</td>
+            <td class="col-price" style="font-size: 13px !important; font-weight: 600 !important;">${formatCurrency(total)}</td>
           </tr>
         </table>
         
@@ -547,15 +657,11 @@ const generateHTMLReceipt = (orderData, printStage) => {
         </table>
         ` : ''}
         
-        <hr>
-        
-        <!-- ASCII ART AND FOOTER - Larger -->
-        <div class="ascii-art">
-╔══════════════════════════════╗
-║         THANK YOU!           ║
-╚══════════════════════════════╝
-        </div>
-        <div class="center-text" style="font-size: 14px !important;"><strong>COME AGAIN SOON!</strong></div>
+        <!-- FOOTER -->
+        <div class="center-text" style="font-size: 14px !important; margin-bottom: 10px !important; margin-top: 20px !important;">          ┌─────────────────────────────┐
+          │        THANK YOU !          │
+          └─────────────────────────────┘</div>
+        <div class="center-text" style="font-size: 14px !important;">${isDelivery ? 'We hope to serve you again !' : 'COME AGAIN SOON!'}</div>
         <div class="center-text">0330-7072222</div>
         <div class="center-text">Abdullah Saleem</div>
         
@@ -569,51 +675,52 @@ const generateHTMLReceipt = (orderData, printStage) => {
     // KITCHEN RECEIPT - Optimized for clarity
     html = `
       <div class="receipt-container">
-        <!-- HEADER -->
-        <div class="header-text">FLAMEX KITCHEN</div>
-        <div class="center-text">Shally Vallay Chock</div>
-        <hr>
+        <!-- LOGO SECTION -->
+        <div class="logo-container">
+ 
+          <img src="${origin}/b-logo.png" alt="Logo" class="logo-image" />
+          <div class="center-text">Shally Vallay Chock</div>
+        </div>
+        <div class="center-text">---------------------------------</div>
         
         <!-- ORDER TITLE - Larger -->
-        <div class="header-text" style="font-size: 17px !important;">KITCHEN ORDER</div>
-        <hr>
+        <div class="header-text" style="font-size: 15px !important;">KITCHEN ORDER</div>
+        <div class="center-text">---------------------------------</div>
         
         <!-- ORDER INFO - Compact -->
         <table class="order-info">
           <tr>
-            <td class="col-item"><strong>Order:</strong></td>
+            <td class="col-item">Order:</td>
             <td class="col-price">${displayOrderId}</td>
           </tr>
           ${!isDelivery && table_number ? `
           <tr>
-            <td class="col-item"><strong>Table:</strong></td>
+            <td class="col-item">Table:</td>
             <td class="col-price">#${table_number}</td>
           </tr>
           ` : ''}
           <tr>
-            <td class="col-item"><strong>Date:</strong></td>
+            <td class="col-item">Date:</td>
             <td class="col-price">${dateStr}</td>
           </tr>
           <tr>
-            <td class="col-item"><strong>Time:</strong></td>
+            <td class="col-item">Time:</td>
             <td class="col-price">${timeStr}</td>
           </tr>
           <tr>
-            <td class="col-item"><strong>Type:</strong></td>
+            <td class="col-item">Type:</td>
             <td class="col-price">${isDelivery ? 'DELIVERY' : 'DINE-IN'}</td>
           </tr>
           ${isDelivery && customer_name ? `
           <tr>
-            <td class="col-item"><strong>Customer:</strong></td>
+            <td class="col-item">Customer:</td>
             <td class="col-price">${truncateText(customer_name, 18)}</td>
           </tr>
           ` : ''}
         </table>
         
-        <hr>
-        
         <!-- ITEMS HEADER -->
-        <div class="header-text">ORDER ITEMS</div>
+        <div class="header-text-left">ORDER ITEMS</div>
         <table>
           <thead>
             <tr>
@@ -628,7 +735,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
       return `
               <tr>
                 <td class="col-item" style="width: 70% !important;">${shortName}</td>
-                <td class="col-qty" style="width: 30% !important; font-size: 13px !important;"><strong>${item.quantity || 0}</strong></td>
+                <td class="col-qty" style="width: 30% !important; font-size: 13px !important;">${item.quantity || 0}</td>
               </tr>
               `;
     }).join('') : `
@@ -641,13 +748,11 @@ const generateHTMLReceipt = (orderData, printStage) => {
         
         ${special_instructions ? `
         <div class="spacer"></div>
-        <div class="header-text">SPECIAL INSTRUCTIONS</div>
-        <div class="center-text" style="border: 1px solid #000; padding: 3px; margin: 3px 0; font-size: 12px !important;">
-          <strong>${truncateText(special_instructions, 32)}</strong>
+        <div class="header-text-left">SPECIAL INSTRUCTIONS</div>
+        <div class="center-text" style="border: 1px solid #000; padding: 3px; margin: 3px 0; font-size: 12px !important; text-align: left !important;">
+          ${truncateText(special_instructions, 32)}
         </div>
         ` : ''}
-        
-        <hr>
         
         <!-- FOOTER - Urgent message -->
         <div class="ascii-art" style="font-size: 12px !important;">
@@ -656,7 +761,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
 │       IMMEDIATELY           │
 └─────────────────────────────┘
         </div>
-        <div class="center-text" style="font-size: 14px !important;"><strong>THANK YOU KITCHEN TEAM!</strong></div>
+        <div class="center-text" style="font-size: 14px !important;">THANK YOU KITCHEN TEAM!</div>
         
         <!-- CUT LINE -->
         <div class="spacer"></div>
@@ -752,10 +857,10 @@ const Receipt = ({ orderData, printStage }) => {
     maxWidth: '400px',
     margin: '0 auto',
     padding: '10px 15px 20px 15px',
-    fontFamily: "'Courier New', monospace",
-    fontSize: '15px',
-    fontWeight: 'bold',
-    lineHeight: '1.5',
+    fontFamily: "'Inter', monospace",
+    fontSize: '13px',
+  fontWeight: '500',
+    lineHeight: '1.1',
     color: '#000000',
     backgroundColor: '#fff',
     boxSizing: 'border-box',
@@ -767,10 +872,20 @@ const Receipt = ({ orderData, printStage }) => {
   };
 
   const headerStyle = {
-    fontSize: '20px',
-    fontWeight: '900',
-    margin: '6px 0',
+    fontSize: '13px',
+    fontWeight: '600',
+    margin: '4px 0',
     textAlign: 'center',
+    width: '100%',
+    boxSizing: 'border-box',
+    color: '#000000'
+  };
+  
+  const headerTextLeftStyle = {
+    fontSize: '13px',
+    fontWeight: '600',
+    margin: '4px 0',
+    textAlign: 'left',
     width: '100%',
     boxSizing: 'border-box',
     color: '#000000'
@@ -784,10 +899,10 @@ const Receipt = ({ orderData, printStage }) => {
 
   const centerTextStyle = {
     textAlign: 'center',
-    margin: '5px 0',
+    margin: '2px 0',
     width: '100%',
-    fontSize: '15px',
-    fontWeight: 'bold',
+    fontSize: '10px',
+  fontWeight: '500',
     boxSizing: 'border-box',
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
@@ -796,38 +911,39 @@ const Receipt = ({ orderData, printStage }) => {
 
   const hrStyle = {
     border: 'none',
-    borderTop: '2px solid #000',
-    margin: '8px 0',
+    borderTop: '0.5px solid #000',
+    margin: '5px 0',
     width: '100%',
     boxSizing: 'border-box'
   };
 
   const asciiArtStyle = {
     fontFamily: 'monospace',
-    fontSize: '13px',
+    fontSize: '11px',
     lineHeight: '1.0',
     whiteSpace: 'pre',
-    margin: '8px 0',
+    margin: '4px 0',
     textAlign: 'center',
     width: '100%',
     color: '#000000',
-    fontWeight: 'bold'
+    fontWeight: '500'
   };
 
   const tableStyle = {
     width: '100%',
     maxWidth: '100%',
     borderCollapse: 'collapse',
-    margin: '8px 0',
+    margin: '4px 0',
     tableLayout: 'fixed',
-    boxSizing: 'border-box'
+    boxSizing: 'border-box',
+    fontSize: '12px'
   };
 
   const tdLeftStyle = {
-    padding: '6px 8px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    lineHeight: '1.5',
+    padding: '2px 0',
+    fontSize: '12px',
+  fontWeight: '500',
+    lineHeight: '1.1',
     textAlign: 'left',
     width: '55%',
     maxWidth: '55%',
@@ -837,14 +953,15 @@ const Receipt = ({ orderData, printStage }) => {
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
     boxSizing: 'border-box',
-    color: '#000000'
+    color: '#000000',
+    verticalAlign: 'top'
   };
 
   const tdCenterStyle = {
-    padding: '6px 8px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    lineHeight: '1.5',
+    padding: '2px 0',
+    fontSize: '12px',
+  fontWeight: '500',
+    lineHeight: '1.1',
     textAlign: 'center',
     width: '15%',
     maxWidth: '15%',
@@ -852,14 +969,15 @@ const Receipt = ({ orderData, printStage }) => {
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
     boxSizing: 'border-box',
-    color: '#000000'
+    color: '#000000',
+    verticalAlign: 'top'
   };
 
   const tdRightStyle = {
-    padding: '6px 8px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    lineHeight: '1.5',
+    padding: '2px 0',
+    fontSize: '12px',
+  fontWeight: '500',
+    lineHeight: '1.1',
     textAlign: 'right',
     width: '30%',
     maxWidth: '30%',
@@ -868,44 +986,71 @@ const Receipt = ({ orderData, printStage }) => {
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
     boxSizing: 'border-box',
-    color: '#000000'
+    color: '#000000',
+    verticalAlign: 'top'
+  };
+
+  // Order info table styles - matches print .order-info td
+  const orderInfoTdStyle = {
+    ...tdLeftStyle,
+    padding: '1px 0',
+    fontSize: '12px',
+    fontWeight: '500',
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word'
   };
 
   if (printStage === 'customer') {
     return (
       <div style={receiptStyle}>
-        {/* HEADER */}
-        <div style={firstHeaderStyle}>FLAMEX</div>
-        <div style={centerTextStyle}>Shally Vallay Chock</div>
-        <div style={centerTextStyle}>Main Range Road</div>
-        <div style={centerTextStyle}>Tel: 0330-7072222</div>
-        <hr style={hrStyle} />
-
+        {/* LOGO SECTION */}
+        <div style={{ textAlign: 'center', width: '100%', margin: '2px 0 3px 0' }}>
+         
+          <img 
+            src={process.env.PUBLIC_URL + '/b-logo.png'} 
+            alt="Logo" 
+            style={{ 
+              maxWidth: '100%', 
+              width: 'auto', 
+              height: 'auto', 
+              maxHeight: '60px', 
+              display: 'block', 
+              margin: '3px auto',
+              objectFit: 'contain'
+            }} 
+            onError={(e) => {
+              console.error('Logo image failed to load:', e.target.src);
+            }}
+          />
+          <div style={centerTextStyle}>Shally Vallay Chock</div>
+        </div>
+        <div style={centerTextStyle}>----------------------------------------</div>
+        
         {/* RECEIPT TITLE */}
         <div style={headerStyle}>CUSTOMER RECEIPT</div>
-        <hr style={hrStyle} />
+        <div style={centerTextStyle}>----------------------------------------</div>
 
         {/* ORDER INFO */}
         <table style={tableStyle}>
           <tbody>
             {!isDelivery && table_number && (
               <tr>
-                <td style={tdLeftStyle}><strong>Table:</strong></td>
-                <td style={tdRightStyle}>#{table_number}</td>
+                <td style={orderInfoTdStyle}>Table:</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>#{table_number}</td>
               </tr>
             )}
             <tr>
-              <td style={tdLeftStyle}><strong>Date:</strong></td>
-              <td style={tdRightStyle}>{dateStr}</td>
+              <td style={orderInfoTdStyle}>Date:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{dateStr}</td>
             </tr>
             <tr>
-              <td style={tdLeftStyle}><strong>Time:</strong></td>
-              <td style={tdRightStyle}>{timeStr}</td>
+              <td style={orderInfoTdStyle}>Time:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{timeStr}</td>
             </tr>
             {payment_method && (
               <tr>
-                <td style={tdLeftStyle}><strong>Payment:</strong></td>
-                <td style={tdRightStyle}>
+                <td style={orderInfoTdStyle}>Payment:</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>
                   {payment_method === 'cash' ? 'Cash' : payment_method === 'bank_transfer' ? 'Bank Transfer' : payment_method}
                 </td>
               </tr>
@@ -915,8 +1060,7 @@ const Receipt = ({ orderData, printStage }) => {
 
         {isDelivery && (
           <>
-            <hr style={hrStyle} />
-            <div style={headerStyle}>DELIVERY DETAILS</div>
+            <div style={headerTextLeftStyle}>DELIVERY DETAILS</div>
             <table style={tableStyle}>
               <tbody>
                 {customer_name && (
@@ -935,7 +1079,7 @@ const Receipt = ({ orderData, printStage }) => {
                   <tr>
                     <td colSpan="2" style={{
                       ...tdLeftStyle,
-                      fontWeight: 'normal',
+                      fontWeight: '500',
                       whiteSpace: 'normal',
                       wordWrap: 'break-word',
                       overflowWrap: 'break-word',
@@ -949,7 +1093,7 @@ const Receipt = ({ orderData, printStage }) => {
                   <tr>
                     <td colSpan="2" style={{
                       ...tdLeftStyle,
-                      fontWeight: 'normal',
+                      fontWeight: '500',
                       whiteSpace: 'normal',
                       wordWrap: 'break-word',
                       overflowWrap: 'break-word',
@@ -964,10 +1108,8 @@ const Receipt = ({ orderData, printStage }) => {
           </>
         )}
 
-        <hr style={hrStyle} />
-
         {/* ITEMS HEADER */}
-        <div style={headerStyle}>ORDER ITEMS</div>
+        <div style={headerTextLeftStyle}>ORDER ITEMS</div>
 
         {/* ITEMS TABLE */}
         <table style={tableStyle}>
@@ -997,129 +1139,137 @@ const Receipt = ({ orderData, printStage }) => {
           </tbody>
         </table>
 
-        <hr style={hrStyle} />
-
         {/* TOTALS */}
-        <div style={headerStyle}>TOTAL AMOUNT</div>
+        {/* <div style={headerTextLeftStyle}>TOTAL AMOUNT</div> */}
+        <div class="center-text">---------------------------------</div>
         <table style={tableStyle}>
           <tbody>
             <tr>
-              <td style={tdLeftStyle}>Subtotal:</td>
-              <td style={tdRightStyle}>{formatCurrency(subtotalBeforeDiscount)}</td>
+              <td style={orderInfoTdStyle}>Subtotal:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{formatCurrency(subtotalBeforeDiscount)}</td>
             </tr>
             {discountPercentValue > 0 && (
               <tr>
-                <td style={tdLeftStyle}>Discount ({discountPercentValue}%):</td>
-                <td style={tdRightStyle}>-{formatCurrency(discountAmount)}</td>
+                <td style={orderInfoTdStyle}>Discount ({discountPercentValue}%):</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>-{formatCurrency(discountAmount)}</td>
               </tr>
             )}
             {isDelivery && deliveryFee > 0 && (
               <tr>
-                <td style={tdLeftStyle}>Delivery:</td>
-                <td style={tdRightStyle}>{formatCurrency(deliveryFee)}</td>
+                <td style={orderInfoTdStyle}>Delivery:</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{formatCurrency(deliveryFee)}</td>
               </tr>
             )}
             <tr>
-              <td style={{ ...tdLeftStyle, fontSize: '16px', fontWeight: 'bolder' }}>GRAND TOTAL:</td>
-              <td style={{ ...tdRightStyle, fontSize: '16px', fontWeight: 'bolder' }}>{formatCurrency(total)}</td>
+              <td style={{ ...orderInfoTdStyle, fontSize: '13px', fontWeight: '600' }}>GRAND TOTAL:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%', fontSize: '13px', fontWeight: '600' }}>{formatCurrency(total)}</td>
             </tr>
           </tbody>
         </table>
 
         {hasCashInfo && hasReturnToShow && (
           <>
-            <div style={{ height: '4px' }}></div>
+            <div style={{ height: '2px' }}></div>
             <table style={tableStyle}>
               <tbody>
                 <tr>
-                  <td style={tdLeftStyle}>Cash Received:</td>
-                  <td style={tdRightStyle}>{formatCurrency(amount_taken)}</td>
+                  <td style={orderInfoTdStyle}>Cash Received:</td>
+                  <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{formatCurrency(amount_taken)}</td>
                 </tr>
                 <tr>
-                  <td style={tdLeftStyle}>{returnLabel}</td>
-                  <td style={tdRightStyle}>{formatCurrency(returnDisplayValue)}</td>
+                  <td style={orderInfoTdStyle}>{returnLabel}</td>
+                  <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{formatCurrency(returnDisplayValue)}</td>
                 </tr>
               </tbody>
             </table>
           </>
         )}
 
-        <hr style={hrStyle} />
-
-        {/* ASCII ART AND FOOTER */}
-        <div style={asciiArtStyle}>
-          ╔══════════════════════════════╗
-          ║         THANK YOU!           ║
-          ╚══════════════════════════════╝
-        </div>
-        <div style={{ ...centerTextStyle, fontSize: '16px' }}><strong>COME AGAIN SOON!</strong></div>
+        {/* FOOTER */}
+        <div style={{ ...centerTextStyle, fontSize: '14px', marginBottom: '2px' }}>꧁𓊈𒆜 THANK YOU 𒆜𓊉꧂</div>
+        <div style={{ ...centerTextStyle, fontSize: '14px' }}>{isDelivery ? 'Thank You! we hope to serve you again' : 'COME AGAIN SOON!'}</div>
         <div style={centerTextStyle}>0330-7072222</div>
         <div style={centerTextStyle}>Abdullah Saleem</div>
 
         {/* CUT LINE */}
-        <div style={{ height: '4px' }}></div>
+        <div style={{ height: '2px' }}></div>
         <div style={centerTextStyle}>══════════════════════════════</div>
-        <div style={{ height: '4px' }}></div>
+        <div style={{ height: '2px' }}></div>
       </div>
     );
   } else {
     // KITCHEN RECEIPT
     return (
       <div style={receiptStyle}>
-        {/* HEADER */}
-        <div style={firstHeaderStyle}>FLAMEX KITCHEN</div>
-        <div style={centerTextStyle}>Shally Vallay Chock</div>
-        <hr style={hrStyle} />
+        {/* LOGO SECTION */}
+        <div style={{ textAlign: 'center', width: '100%', margin: '2px 0 3px 0' }}>
+          <img 
+            src={process.env.PUBLIC_URL + '/b-logo.png'} 
+            alt="Logo" 
+            style={{ 
+              maxWidth: '100%', 
+              width: 'auto', 
+              height: 'auto', 
+              maxHeight: '60px', 
+              display: 'block', 
+              margin: '3px auto',
+              objectFit: 'contain'
+            }} 
+            onError={(e) => {
+              console.error('Logo image failed to load:', e.target.src);
+            }}
+          />
+          <div style={centerTextStyle}>Shally Vallay Chock</div>
+        </div>
+        <div style={centerTextStyle}>---------------------------------</div>
 
         {/* ORDER TITLE */}
-        <div style={{ ...headerStyle, fontSize: '22px' }}>KITCHEN ORDER</div>
-        <hr style={hrStyle} />
+        <div style={{ ...headerStyle, fontSize: '15px' }}>KITCHEN ORDER</div>
+        <div style={centerTextStyle}>---------------------------------</div>
 
         {/* ORDER INFO */}
         <table style={tableStyle}>
           <tbody>
             <tr>
-              <td style={tdLeftStyle}><strong>Order:</strong></td>
-              <td style={tdRightStyle}>{displayOrderId}</td>
+              <td style={orderInfoTdStyle}>Order:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{displayOrderId}</td>
             </tr>
             {!isDelivery && table_number && (
               <tr>
-                <td style={tdLeftStyle}><strong>Table:</strong></td>
-                <td style={tdRightStyle}>#{table_number}</td>
+                <td style={orderInfoTdStyle}>Table:</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>#{table_number}</td>
               </tr>
             )}
             <tr>
-              <td style={tdLeftStyle}><strong>Date:</strong></td>
-              <td style={tdRightStyle}>{dateStr}</td>
+              <td style={orderInfoTdStyle}>Date:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{dateStr}</td>
             </tr>
             <tr>
-              <td style={tdLeftStyle}><strong>Time:</strong></td>
-              <td style={tdRightStyle}>{timeStr}</td>
+              <td style={orderInfoTdStyle}>Time:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{timeStr}</td>
             </tr>
             <tr>
-              <td style={tdLeftStyle}><strong>Type:</strong></td>
-              <td style={tdRightStyle}>{isDelivery ? 'DELIVERY' : 'DINE-IN'}</td>
+              <td style={orderInfoTdStyle}>Type:</td>
+              <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{isDelivery ? 'DELIVERY' : 'DINE-IN'}</td>
             </tr>
             {isDelivery && customer_name && (
               <tr>
-                <td style={tdLeftStyle}><strong>Customer:</strong></td>
-                <td style={tdRightStyle}>{truncateText(customer_name, 18)}</td>
+                <td style={orderInfoTdStyle}>Customer:</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{truncateText(customer_name, 18)}</td>
               </tr>
             )}
           </tbody>
         </table>
 
-        <hr style={hrStyle} />
-
         {/* ITEMS HEADER */}
-        <div style={headerStyle}>ORDER ITEMS</div>
+        <div style={headerTextLeftStyle}>ORDER ITEMS</div>
 
         {/* ITEMS TABLE */}
         <table style={tableStyle}>
           <thead>
             <tr>
               <th style={{ ...tdLeftStyle, width: '70%' }}>Item</th>
-              <th style={{ ...tdCenterStyle, width: '30%', fontSize: '16px' }}>Qty</th>
+              <th style={{ ...tdCenterStyle, width: '30%', fontSize: '13px' }}>Qty</th>
             </tr>
           </thead>
           <tbody>
@@ -1129,7 +1279,7 @@ const Receipt = ({ orderData, printStage }) => {
               return (
                 <tr key={index}>
                   <td style={{ ...tdLeftStyle, width: '70%' }}>{shortName}</td>
-                  <td style={{ ...tdCenterStyle, width: '30%', fontSize: '16px', fontWeight: 'bolder' }}>{item.quantity || 0}</td>
+                  <td style={{ ...tdCenterStyle, width: '30%', fontSize: '13px' }}>{item.quantity || 0}</td>
                 </tr>
               );
             })}
@@ -1138,15 +1288,13 @@ const Receipt = ({ orderData, printStage }) => {
 
         {special_instructions && (
           <>
-            <div style={{ height: '4px' }}></div>
-            <div style={headerStyle}>SPECIAL INSTRUCTIONS</div>
-            <div style={{ ...centerTextStyle, border: '1px solid #000', padding: '4px', margin: '4px 0' }}>
-              <strong>{truncateText(special_instructions, 32)}</strong>
+            <div style={{ height: '2px' }}></div>
+            <div style={headerTextLeftStyle}>SPECIAL INSTRUCTIONS</div>
+            <div style={{ ...centerTextStyle, border: '1px solid #000', padding: '4px', margin: '4px 0', textAlign: 'left' }}>
+              {truncateText(special_instructions, 32)}
             </div>
           </>
         )}
-
-        <hr style={hrStyle} />
 
         {/* FOOTER */}
         <div style={asciiArtStyle}>
@@ -1154,13 +1302,14 @@ const Receipt = ({ orderData, printStage }) => {
           │      PLEASE PREPARE         │
           │       IMMEDIATELY           │
           └─────────────────────────────┘
+
         </div>
-        <div style={{ ...centerTextStyle, fontSize: '16px' }}><strong>THANK YOU KITCHEN TEAM!</strong></div>
+        <div style={{ ...centerTextStyle, fontSize: '14px' }}>THANK YOU KITCHEN TEAM!</div>
 
         {/* CUT LINE */}
-        <div style={{ height: '4px' }}></div>
+        <div style={{ height: '2px' }}></div>
         <div style={centerTextStyle}>════════════════════════════</div>
-        <div style={{ height: '4px' }}></div>
+        <div style={{ height: '2px' }}></div>
       </div>
     );
   }
