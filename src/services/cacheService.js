@@ -440,6 +440,21 @@ export const getCachedAPIResponse = async (url, method = 'GET', params = {}) => 
 };
 
 /**
+ * Clear all cached API responses (does not touch auth/session data)
+ */
+export const clearApiCache = async () => {
+  try {
+    const db = await openDB();
+    const tx = db.transaction('api-responses', 'readwrite');
+    const store = tx.objectStore('api-responses');
+    await store.clear();
+    console.log('[CacheService] Cleared api-responses cache');
+  } catch (error) {
+    console.error('[CacheService] Error clearing api-responses cache:', error);
+  }
+};
+
+/**
  * Invalidate cache for a resource type or specific URL
  */
 export const invalidateCache = async (resourceType = null, url = null) => {

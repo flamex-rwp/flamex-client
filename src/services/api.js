@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { cacheAPIResponse, getCachedAPIResponse } from '../services/cacheService';
 import { isOnline } from './offlineSyncService';
+import { serverErrorService } from './serverErrorService';
 
 // Use environment variable for API URL
 // Debug: Log all environment variables that start with REACT_APP
@@ -39,7 +40,9 @@ api.interceptors.request.use(
       data: config.data
     });
 
-    // Mark GET requests for cache checking
+    // Debug telemetry removed - was causing ERR_CONNECTION_REFUSED errors
+
+    // Mark GET requests for cache checking (only used when offline / network fail)
     if (method === 'GET') {
       config._shouldCheckCache = true;
     }
@@ -91,12 +94,14 @@ api.interceptors.response.use(
 
     // For GET requests when offline or network error, try to return cached data
     // Check for network errors: no response object, or network error code, or offline
+    // Check if it's a network error (not a server validation error)
     const isNetworkError = !error.response || 
                           error.code === 'ERR_NETWORK' || 
-                          error.message === 'Network Error' ||
-                          !isOnline();
+                          error.message === 'Network Error';
     
-    if (method === 'GET' && error.config?._shouldCheckCache && isNetworkError) {
+    let hasCachedData = false;
+    
+    if (method === 'GET' && error.config?._shouldCheckCache && isNetworkError && !error.config?.disableCacheFallback) {
       try {
         const params = error.config.params || {};
         // Normalize URL - remove base URL if present, ensure it starts with /
@@ -123,6 +128,7 @@ api.interceptors.response.use(
         const cachedResponse = await getCachedAPIResponse(fullUrl, method, params);
         if (cachedResponse) {
           console.log(`📦 Serving from cache (${!isOnline() ? 'offline' : 'network error'}): ${fullUrl}`);
+          hasCachedData = true;
           // Return cached response wrapped in axios format
           return Promise.resolve({
             data: cachedResponse,
@@ -146,6 +152,24 @@ api.interceptors.response.use(
       fullError: error,
       isNetworkError: !error.response
     });
+
+    // Debug telemetry removed - was causing ERR_CONNECTION_REFUSED errors
+
+    // Trigger server connection modal ONLY for auth endpoints
+    // Show modal if:
+    // 1. Endpoint is auth AND network error (no cache or non-GET)
+    // 2. Endpoint is auth AND server error (500+)
+    const isServerError = error.response?.status >= 500;
+    const isAuthEndpoint = url.includes('/api/auth/');
+    const shouldShowModal = isAuthEndpoint && ((isNetworkError && !hasCachedData) || isServerError);
+    
+    // #region agent log
+    // Debug telemetry removed - was causing ERR_CONNECTION_REFUSED errors
+    // #endregion
+    
+    if (shouldShowModal) {
+      serverErrorService.triggerError(error);
+    }
 
     // Handle unauthorized - clear auth and redirect
     if (error.response?.status === 401) {
@@ -208,7 +232,7 @@ export const ordersAPI = {
     const queryParams = { status: 'pending', ...params };
     return api.get('/api/orders/dine-in/active', { params: queryParams });
   },
-  getDineInStats: () => api.get('/api/orders/dine-in/stats'),
+  getDineInStats: (params = {}, config = {}) => api.get('/api/orders/dine-in/stats', { params, ...config }),
   markAsPaid: (id, data) => api.put(`/api/orders/${id}/mark-paid`, data),
   getTableAvailability: () => api.get('/api/orders/dine-in/tables/availability'),
 
@@ -217,7 +241,7 @@ export const ordersAPI = {
     const queryParams = { status: 'pending', ...params };
     return api.get('/api/orders/delivery/active', { params: queryParams });
   },
-  getDeliveryStats: (params) => api.get('/api/orders/delivery/stats', { params }),
+  getDeliveryStats: (params = {}, config = {}) => api.get('/api/orders/delivery/stats', { params, ...config }),
   assignRider: (id, riderId) => api.put(`/api/orders/${id}/assign-rider`, { riderId }),
   updateDeliveryStatus: (id, deliveryStatus) => api.put(`/api/orders/${id}/delivery/status`, { deliveryStatus }),
 

@@ -10,6 +10,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
   const [showAddForm, setShowAddForm] = useState(false);
   const [newAddress, setNewAddress] = useState('');
   const [newAddressNotes, setNewAddressNotes] = useState('');
+  const [newGoogleMapsLink, setNewGoogleMapsLink] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
@@ -101,6 +102,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
           address: newAddress.trim(),
           isDefault,
           notes: newAddressNotes.trim() || undefined,
+          googleMapsLink: newGoogleMapsLink.trim() || undefined,
           customerId: customer.id,
           offline: true
         };
@@ -122,7 +124,8 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
             data: {
               address: newAddr.address,
               isDefault: newAddr.isDefault,
-              notes: newAddr.notes
+              notes: newAddr.notes,
+              googleMapsLink: newAddr.googleMapsLink
             },
             offlineId: customer.id
           });
@@ -130,11 +133,12 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
           console.warn('Failed to cache offline address:', offlineErr);
         }
 
-        setAddresses(prev => [...prev, newAddr]);
-        setNewAddress('');
-        setNewAddressNotes('');
-        setIsDefault(false);
-        setShowAddForm(false);
+      setAddresses(prev => [...prev, newAddr]);
+      setNewAddress('');
+      setNewAddressNotes('');
+      setNewGoogleMapsLink('');
+      setIsDefault(false);
+      setShowAddForm(false);
         showSuccess('Address saved offline. It will sync when back online.');
         if (onAddressUpdate) onAddressUpdate();
         return;
@@ -144,13 +148,15 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       const response = await customerAPI.createAddress(customer.id, {
         address: newAddress.trim(),
         isDefault: isDefault,
-        notes: newAddressNotes.trim() || undefined
+        notes: newAddressNotes.trim() || undefined,
+        googleMapsLink: newGoogleMapsLink.trim() || undefined
       });
 
       const newAddr = response.data?.data || response.data;
       await loadAddresses(); // Reload to get updated list
       setNewAddress('');
       setNewAddressNotes('');
+      setNewGoogleMapsLink('');
       setIsDefault(false);
       setShowAddForm(false);
       showSuccess('Address added successfully');
@@ -359,7 +365,20 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                       </div>
                       {defaultAddress.notes && (
                         <div style={{ fontSize: '0.9rem', color: '#6c757d', marginTop: '0.25rem' }}>
-                          {defaultAddress.notes}
+                          <strong>Notes:</strong> {defaultAddress.notes}
+                        </div>
+                      )}
+                      {defaultAddress.googleMapsLink && (
+                        <div style={{ fontSize: '0.9rem', color: '#6c757d', marginTop: '0.25rem' }}>
+                          <strong>Google Maps:</strong>{' '}
+                          <a 
+                            href={defaultAddress.googleMapsLink} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                          >
+                            {defaultAddress.googleMapsLink}
+                          </a>
                         </div>
                       )}
                     </div>
@@ -409,7 +428,20 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                             </div>
                             {addr.notes && (
                               <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
-                                {addr.notes}
+                                <strong>Notes:</strong> {addr.notes}
+                              </div>
+                            )}
+                            {addr.googleMapsLink && (
+                              <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
+                                <strong>Google Maps:</strong>{' '}
+                                <a 
+                                  href={addr.googleMapsLink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                                >
+                                  {addr.googleMapsLink}
+                                </a>
                               </div>
                             )}
                           </div>
@@ -522,6 +554,25 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                     />
                   </div>
 
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem', fontWeight: '500' }}>
+                      Google Maps Link (optional)
+                    </label>
+                    <input
+                      type="url"
+                      value={newGoogleMapsLink}
+                      onChange={(e) => setNewGoogleMapsLink(e.target.value)}
+                      placeholder="https://maps.google.com/..."
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        fontSize: '0.9rem'
+                      }}
+                    />
+                  </div>
+
                   <div style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center' }}>
                     <input
                       type="checkbox"
@@ -560,6 +611,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                         setShowAddForm(false);
                         setNewAddress('');
                         setNewAddressNotes('');
+                        setNewGoogleMapsLink('');
                         setIsDefault(false);
                       }}
                       style={{

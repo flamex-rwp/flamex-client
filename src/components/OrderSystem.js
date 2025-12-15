@@ -4,8 +4,9 @@ import { menuItemsAPI, ordersAPI, API_BASE_URL } from '../services/api';
 import { printReceipt } from './Receipt';
 import OfflineIndicator from './OfflineIndicator';
 import { customerAPI } from '../services/customerAPI';
-import { saveOfflineOrder, cacheMenuItems, getCachedMenuItems, getCachedTableAvailability, getOfflineOrderById, updateOfflineOrder, addPendingOperation, getAllOrders } from '../utils/offlineDB';
+import { saveOfflineOrder, cacheMenuItems, getCachedMenuItems, getCachedTableAvailability, getOfflineOrderById, updateOfflineOrder, addPendingOperation, getAllOrders, cacheTableAvailability } from '../utils/offlineDB';
 import { isOnline } from '../utils/offlineSync';
+import { isOnline as checkServerOnline } from '../services/offlineSyncService';
 import { useToast } from '../contexts/ToastContext';
 import { keyboardShortcuts } from '../utils/keyboardShortcuts';
 import EmptyState from './EmptyState';
@@ -25,6 +26,7 @@ const createCartTemplate = (id, name = `Cart ${id}`) => ({
   deliveryBackupPhone: '',
   deliveryAddress: '',
   deliveryNotes: '',
+  googleMapsLink: '',
   deliveryCharge: '',
   deliveryPaymentType: 'cod',
   discountPercent: 0
@@ -53,6 +55,8 @@ const OrderSystem = () => {
   const [showPhoneSuggestions, setShowPhoneSuggestions] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [phoneSearchLoading, setPhoneSearchLoading] = useState(false);
+  const reserveTableRef = useRef(null);
+  const releaseTableRef = useRef(null);
 
   const activeCart = carts.find(c => c.id === activeCartId) || carts[0];
   const cart = activeCart.items;
@@ -65,6 +69,7 @@ const OrderSystem = () => {
   const deliveryBackupPhone = activeCart.deliveryBackupPhone || '';
   const deliveryAddress = activeCart.deliveryAddress || '';
   const deliveryNotes = activeCart.deliveryNotes || '';
+  const googleMapsLink = activeCart.googleMapsLink || '';
   const deliveryCharge = activeCart.deliveryCharge === 0 ? '0' : (activeCart.deliveryCharge || '');
   const deliveryPaymentType = activeCart.deliveryPaymentType || 'cod';
   const discountPercent = activeCart.discountPercent || 0;
@@ -88,6 +93,12 @@ const OrderSystem = () => {
             orderNumber: t.orderNumber || t.order_number
           }));
           setOccupiedTables(normalizedTables);
+          // Persist latest server state to offline cache so going offline reflects reality
+          try {
+            await cacheTableAvailability(normalizedTables);
+          } catch (err) {
+            console.warn('[OrderSystem] Failed to cache latest table availability:', err);
+          }
         } else {
           // Load from cache when offline
           const cachedTables = await getCachedTableAvailability();
@@ -118,7 +129,11 @@ const OrderSystem = () => {
           console.log('[OrderSystem] Offline occupied tables from orders:', offlineOccupiedTables);
           
           // Combine cached tables and offline orders, removing duplicates
-          const combinedTables = [...cachedTables];
+          // Remove any cached tables that no longer have corresponding offline orders
+          const combinedTables = [...cachedTables].filter(t => {
+            const tNum = t.tableNumber || t.table_number;
+            return offlineOccupiedTables.some(o => String(o.tableNumber) === String(tNum));
+          });
           offlineOccupiedTables.forEach(offlineTable => {
             const tableNum = offlineTable.tableNumber;
             // Check if this table is already in the list
@@ -242,7 +257,10 @@ const OrderSystem = () => {
           }));
         
         // Combine cached tables and offline orders, removing duplicates
-        const combinedTables = [...cachedTables];
+        const combinedTables = [...cachedTables].filter(t => {
+          const tNum = t.tableNumber || t.table_number;
+          return offlineOccupiedTables.some(o => parseInt(o.tableNumber) === parseInt(tNum));
+        });
         offlineOccupiedTables.forEach(offlineTable => {
           const tableNum = offlineTable.tableNumber;
           // Check if this table is already in the list
@@ -269,6 +287,115 @@ const OrderSystem = () => {
     
     return () => clearInterval(interval);
   }, [isDelivery]);
+
+  // Helpers to reserve/release tables locally and persist to cache
+  reserveTableRef.current = useCallback(async (tableNum, orderInfo = {}) => {
+    if (isDelivery) return;
+    const numericTable = parseInt(tableNum);
+    if (Number.isNaN(numericTable)) return;
+
+    // Update local state so the UI immediately disables the table
+    setOccupiedTables(prev => {
+      const exists = prev.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
+      if (exists) return prev;
+      return [...prev, {
+        tableNumber: numericTable,
+        table_number: numericTable,
+        id: orderInfo.orderId || orderInfo.id || null,
+        orderId: orderInfo.orderId || orderInfo.id || null,
+        orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
+        order_number: orderInfo.orderNumber || orderInfo.order_number || null
+      }];
+    });
+
+    // Persist to cached table availability so refresh keeps it reserved
+    try {
+      const cached = await getCachedTableAvailability();
+      const exists = cached.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
+      if (!exists) {
+        const merged = [...cached, {
+          tableNumber: numericTable,
+          table_number: numericTable,
+          id: orderInfo.orderId || orderInfo.id || null,
+          orderId: orderInfo.orderId || orderInfo.id || null,
+          orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
+          order_number: orderInfo.orderNumber || orderInfo.order_number || null
+        }];
+        await cacheTableAvailability(merged);
+      }
+    } catch (err) {
+      console.warn('[OrderSystem] Failed to persist offline table reservation:', err);
+    }
+  }, [isDelivery]);
+
+  releaseTableRef.current = useCallback(async (tableNum) => {
+    if (isDelivery) return;
+    const numericTable = parseInt(tableNum);
+    if (Number.isNaN(numericTable)) return;
+
+    setOccupiedTables(prev => prev.filter(t => parseInt(t.tableNumber || t.table_number) !== numericTable));
+
+    try {
+      const cached = await getCachedTableAvailability();
+      const filtered = cached.filter(t => parseInt(t.tableNumber || t.table_number) !== numericTable);
+      await cacheTableAvailability(filtered);
+    } catch (err) {
+      console.warn('[OrderSystem] Failed to persist table release:', err);
+    }
+  }, [isDelivery]);
+
+  // Listen for table release events from other parts of the app
+  useEffect(() => {
+    const handleTableFreed = async (event) => {
+      const tableNum = event?.detail?.tableNumber;
+      if (!tableNum) return;
+      if (releaseTableRef.current) {
+        await releaseTableRef.current(tableNum);
+      }
+    };
+    window.addEventListener('tableFreed', handleTableFreed);
+    return () => window.removeEventListener('tableFreed', handleTableFreed);
+  }, []);
+
+  // Local helper to reserve a table in offline cache/state when creating dine-in orders offline
+  reserveTableRef.current = useCallback(async (tableNum, orderInfo = {}) => {
+    if (isDelivery) return;
+    const numericTable = parseInt(tableNum);
+    if (Number.isNaN(numericTable)) return;
+
+    // Update local state so UI reflects reservation immediately
+    setOccupiedTables(prev => {
+      const exists = prev.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
+      if (exists) return prev;
+      return [...prev, {
+        tableNumber: numericTable,
+        table_number: numericTable,
+        id: orderInfo.orderId || orderInfo.id || null,
+        orderId: orderInfo.orderId || orderInfo.id || null,
+        orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
+        order_number: orderInfo.orderNumber || orderInfo.order_number || null
+      }];
+    });
+
+    // Persist to cached table availability so a refresh still shows it occupied
+    try {
+      const cached = await getCachedTableAvailability();
+      const exists = cached.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
+      if (!exists) {
+        const merged = [...cached, {
+          tableNumber: numericTable,
+          table_number: numericTable,
+          id: orderInfo.orderId || orderInfo.id || null,
+          orderId: orderInfo.orderId || orderInfo.id || null,
+          orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
+          order_number: orderInfo.orderNumber || orderInfo.order_number || null
+        }];
+        await cacheTableAvailability(merged);
+      }
+    } catch (err) {
+      console.warn('[OrderSystem] Failed to persist offline table reservation:', err);
+    }
+  }, [isDelivery, setOccupiedTables]);
 
   const updateActiveCart = useCallback((updates) => {
     setCarts(prevCarts =>
@@ -317,8 +444,8 @@ const OrderSystem = () => {
   };
 
   const handleTableNumberChange = (value) => {
-    // Check if table is occupied before allowing selection
-    if (value && !isDelivery) {
+    // Check if table is occupied before allowing selection (skip check for "takeaway")
+    if (value && !isDelivery && value !== 'takeaway') {
       const tableNum = parseInt(value);
       if (!isNaN(tableNum)) {
         const isOccupied = occupiedTables.some(t => {
@@ -332,16 +459,16 @@ const OrderSystem = () => {
           )) {
             return false;
           }
-          // Check both tableNumber and table_number fields, ensure proper number comparison
+          // Check both tableNumber and table_number fields, ensure proper comparison
           const occupiedTableNum = t.tableNumber || t.table_number;
           if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
-          return parseInt(occupiedTableNum) === tableNum;
+          return String(occupiedTableNum) === String(tableNum);
         });
 
         if (isOccupied) {
           const occupiedOrder = occupiedTables.find(t => {
             const occupiedTableNum = t.tableNumber || t.table_number;
-            return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
+            return occupiedTableNum !== null && occupiedTableNum !== undefined && String(occupiedTableNum) === String(tableNum);
           });
           const orderNumber = occupiedOrder?.orderNumber || occupiedOrder?.order_number || 'N/A';
           showError(`Table #${tableNum} is already reserved (Order #${orderNumber}). Please select a different table.`);
@@ -952,34 +1079,40 @@ const OrderSystem = () => {
         setCheckoutError('Table number is required for dine-in orders.');
         return;
       }
-      const tableNum = parseInt(tableNumber);
-      if (isNaN(tableNum) || tableNum < 1) {
-        setCheckoutError('Please enter a valid table number (1 or greater).');
-        return;
+      // Allow "takeaway" or numeric table numbers 1-9
+      if (tableNumber !== 'takeaway') {
+        const tableNum = parseInt(tableNumber);
+        if (isNaN(tableNum) || tableNum < 1) {
+          setCheckoutError('Please enter a valid table number (1-9) or select "Take Away".');
+          return;
+        }
       }
 
-      // Check if table is occupied (excluding current order if editing)
-                      const isOccupied = occupiedTables.some(t => {
-                        // If editing and this is the same order, don't consider it occupied
-                        const occupiedOrderId = t.orderId || t.order_id || t.id;
-                        const occupiedOrderNumber = t.orderNumber || t.order_number;
-                        
-                        if (editingOrder && (
-                          (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
-                          (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
-                        )) {
-                          return false;
-                        }
-                        // Check both tableNumber and table_number fields, ensure proper number comparison
-                        const occupiedTableNum = t.tableNumber || t.table_number;
-                        if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
-                        return parseInt(occupiedTableNum) === tableNum;
-                      });
+      // Check if table is occupied (excluding current order if editing, skip check for "takeaway")
+      if (tableNumber !== 'takeaway') {
+        const tableNum = parseInt(tableNumber);
+        const isOccupied = occupiedTables.some(t => {
+          // If editing and this is the same order, don't consider it occupied
+          const occupiedOrderId = t.orderId || t.order_id || t.id;
+          const occupiedOrderNumber = t.orderNumber || t.order_number;
+          
+          if (editingOrder && (
+            (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
+            (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
+          )) {
+            return false;
+          }
+          // Check both tableNumber and table_number fields, ensure proper comparison
+          const occupiedTableNum = t.tableNumber || t.table_number;
+          if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+          return String(occupiedTableNum) === String(tableNum);
+        });
 
-      if (isOccupied) {
-        const occupiedOrder = occupiedTables.find(t => (t.tableNumber || t.table_number) === tableNum);
-        setCheckoutError(`Table #${tableNum} already has a pending order (Order #${occupiedOrder.orderNumber || occupiedOrder.order_number}). Please complete or cancel the existing order first.`);
-        return;
+        if (isOccupied) {
+          const occupiedOrder = occupiedTables.find(t => String(t.tableNumber || t.table_number) === String(tableNum));
+          setCheckoutError(`Table #${tableNum} already has a pending order (Order #${occupiedOrder?.orderNumber || occupiedOrder?.order_number || 'N/A'}). Please complete or cancel the existing order first.`);
+          return;
+        }
       }
     }
 
@@ -1036,10 +1169,11 @@ const OrderSystem = () => {
             customerId: customerId,
             deliveryAddress: deliveryAddress.trim(),
             deliveryNotes: deliveryNotes.trim() || undefined,
+            googleMapsLink: googleMapsLink.trim() || undefined,
             deliveryCharge: deliveryChargeValue
           }),
           ...(!isDelivery && {
-            tableNumber: parseInt(tableNumber)
+            tableNumber: tableNumber || undefined
           }),
           specialInstructions: specialInstructions.trim() || undefined,
           discountPercent: discountPercent || 0
@@ -1122,20 +1256,44 @@ const OrderSystem = () => {
             customerId: customerId,
             deliveryAddress: deliveryAddress.trim(),
             deliveryNotes: deliveryNotes.trim() || undefined,
+            googleMapsLink: googleMapsLink.trim() || undefined,
             deliveryCharge: deliveryChargeValue
           }),
           ...(!isDelivery && {
-            tableNumber: parseInt(tableNumber)
+            tableNumber: tableNumber || undefined
           }),
           specialInstructions: specialInstructions.trim() || undefined,
           discountPercent: discountPercent || 0
         };
 
-        if (isOnline()) {
+        // Check if server is actually reachable (not just browser online status)
+        const serverOnline = await isOnline();
+        if (serverOnline) {
           try {
-            const response = await ordersAPI.create(orderData);
+            // Clean up orderData - remove empty strings, ensure proper types
+            const cleanedOrderData = {
+              ...orderData,
+              // Ensure tableNumber is always a string (never a number)
+              tableNumber: orderData.tableNumber 
+                ? (typeof orderData.tableNumber === 'string' 
+                    ? (orderData.tableNumber.trim() !== '' ? orderData.tableNumber : undefined)
+                    : String(orderData.tableNumber))
+                : undefined,
+              deliveryAddress: orderData.deliveryAddress && orderData.deliveryAddress.trim() !== '' ? orderData.deliveryAddress : undefined,
+              deliveryNotes: orderData.deliveryNotes && orderData.deliveryNotes.trim() !== '' ? orderData.deliveryNotes : undefined,
+              googleMapsLink: orderData.googleMapsLink && orderData.googleMapsLink.trim() !== '' ? orderData.googleMapsLink : undefined,
+              specialInstructions: orderData.specialInstructions && orderData.specialInstructions.trim() !== '' ? orderData.specialInstructions : undefined,
+            };
+            
+            console.log('Creating order with cleaned data:', cleanedOrderData);
+            const response = await ordersAPI.create(cleanedOrderData);
             orderId = response.data.data?.id;
             orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
+            
+            if (!orderId) {
+              throw new Error('Order was created but no ID was returned from server');
+            }
+            
             showSuccess(`Order #${orderNumber || orderId} created successfully!`);
             
             // Dispatch event to refresh badges immediately
@@ -1143,17 +1301,67 @@ const OrderSystem = () => {
               detail: { orderType: orderType, orderId, orderNumber } 
             }));
           } catch (error) {
-            console.warn('Failed to create order online, saving offline:', error);
-            const savedOrder = await saveOfflineOrder(orderData);
-            orderId = savedOrder.id;
-            orderNumber = null;
-            isOffline = true;
-            showInfo('Order saved offline. It will sync when you are back online.');
+            console.error('Order creation error details:', {
+              error,
+              response: error.response,
+              status: error.response?.status,
+              data: error.response?.data,
+              orderData
+            });
+            console.error('Failed to create order online:', error);
             
-            // Dispatch event for offline orders too
-            window.dispatchEvent(new CustomEvent('orderCreated', { 
-              detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
-            }));
+            // Only save offline if it's a network error, not a validation/server error
+            const isNetworkError = !error.response || 
+                                  error.code === 'ERR_NETWORK' || 
+                                  error.message === 'Network Error' ||
+                                  (error.response && error.response.status >= 500);
+            
+            if (isNetworkError) {
+              console.warn('Network error detected, saving offline:', error);
+              const savedOrder = await saveOfflineOrder(orderData);
+              orderId = savedOrder.id;
+              orderNumber = null;
+              isOffline = true;
+              showInfo('Order saved offline. It will sync when you are back online.');
+              
+              // Reserve table locally for offline order
+              if (!isDelivery && reserveTableRef.current) {
+                await reserveTableRef.current(tableNumber, { orderId, orderNumber });
+              }
+              
+              // Dispatch event for offline orders too
+              window.dispatchEvent(new CustomEvent('orderCreated', { 
+                detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
+              }));
+            } else {
+              // Server validation error or other API error - show error message and STOP
+              const errorData = error.response?.data || {};
+              const validationErrors = errorData.errors || [];
+              let errorMessage = errorData.error || errorData.message || error.message || 'Failed to create order. Please check your input and try again.';
+              
+              // If there are specific validation errors, show them
+              if (validationErrors.length > 0) {
+                const errorDetails = validationErrors.map(err => {
+                  const field = err.path?.join('.') || err.field || 'field';
+                  const msg = err.message || err.msg || 'Invalid value';
+                  return `${field}: ${msg}`;
+                }).join(', ');
+                errorMessage = `Validation failed: ${errorDetails}`;
+              }
+              
+              console.error('Order creation failed - Full error details:', {
+                errorMessage,
+                validationErrors,
+                errorData,
+                orderData,
+                status: error.response?.status
+              });
+              
+              setCheckoutError(errorMessage);
+              showError(errorMessage);
+              // Return early - don't print receipt or clear cart if order creation failed
+              return;
+            }
           }
         } else {
           const savedOrder = await saveOfflineOrder(orderData);
@@ -1162,6 +1370,11 @@ const OrderSystem = () => {
           isOffline = true;
           showInfo('Order saved offline. It will sync when you are back online.');
           
+          // Reserve table locally for offline order
+          if (!isDelivery && reserveTableRef.current) {
+            await reserveTableRef.current(tableNumber, { orderId, orderNumber });
+          }
+          
           // Dispatch event for offline orders
           window.dispatchEvent(new CustomEvent('orderCreated', { 
             detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
@@ -1169,11 +1382,17 @@ const OrderSystem = () => {
         }
       }
 
+      // Only proceed if order was successfully created (has orderId)
+      if (!orderId) {
+        console.error('Cannot print receipt: Order was not created successfully');
+        return;
+      }
+
       // Prepare receipt data
       const receiptData = {
         id: orderId,
         order_number: orderNumber || orderId,
-        table_number: !isDelivery ? parseInt(tableNumber) : null,
+        table_number: !isDelivery ? (tableNumber || null) : null,
         items: cart.map(item => ({
           name: item.name,
           quantity: item.quantity,
@@ -1195,16 +1414,16 @@ const OrderSystem = () => {
         customer_phone: isDelivery ? deliveryPhone.trim() : null,
         customer_address: isDelivery ? deliveryAddress : null,
         delivery_notes: isDelivery ? deliveryNotes : '',
+        customer: isDelivery && selectedCustomer ? selectedCustomer : null, // Include customer object for notes fallback
         created_at: new Date().toISOString()
       };
 
       // Print receipts
       if (isDelivery) {
         try {
-          await printReceipt(receiptData, 'customer');
-          setTimeout(() => {
-            printReceipt(receiptData, 'kitchen').catch(console.error);
-          }, 1500);
+          // Use combined receipt printing for delivery orders
+          const { printCombinedReceipt } = await import('./Receipt');
+          await printCombinedReceipt(receiptData);
         } catch (error) {
           console.error('Error printing receipt:', error);
         }
@@ -1916,14 +2135,14 @@ const OrderSystem = () => {
                     Table Number <span style={{ color: '#dc3545' }}>*</span>
                   </label>
 
-                  {/* Quick Table Selection (1-10) */}
+                  {/* Quick Table Selection (1-9 + Take Away) */}
                   <div style={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(5, 1fr)',
                     gap: '0.5rem',
                     marginBottom: '0.75rem'
                   }}>
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(tableNum => {
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(tableNum => {
                       const isOccupied = occupiedTables.some(t => {
                         // If editing and this is the same order, don't consider it occupied
                         const occupiedOrderId = t.orderId || t.order_id || t.id;
@@ -1938,9 +2157,9 @@ const OrderSystem = () => {
                         // Check both tableNumber and table_number fields
                         const occupiedTableNum = t.tableNumber || t.table_number;
                         // Ensure we're comparing numbers
-                        return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
+                        return occupiedTableNum !== null && occupiedTableNum !== undefined && String(occupiedTableNum) === String(tableNum);
                       });
-                      const isSelected = parseInt(tableNumber) === tableNum;
+                      const isSelected = String(tableNumber) === String(tableNum);
                       return (
                         <button
                           key={tableNum}
@@ -1952,7 +2171,7 @@ const OrderSystem = () => {
                               // Show error message when clicking on occupied table
                               const occupiedOrder = occupiedTables.find(t => {
                                 const occupiedTableNum = t.tableNumber || t.table_number;
-                                return occupiedTableNum !== null && occupiedTableNum !== undefined && parseInt(occupiedTableNum) === tableNum;
+                                return occupiedTableNum !== null && occupiedTableNum !== undefined && String(occupiedTableNum) === String(tableNum);
                               });
                               const orderNumber = occupiedOrder?.orderNumber || occupiedOrder?.order_number || 'N/A';
                               showError(`Table #${tableNum} is already reserved (Order #${orderNumber}). Please select a different table.`);
@@ -1986,16 +2205,34 @@ const OrderSystem = () => {
                         </button>
                       );
                     })}
+                    {/* Take Away Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleTableNumberChange('takeaway')}
+                      style={{
+                        padding: '0.75rem',
+                        borderRadius: '8px',
+                        border: tableNumber === 'takeaway' ? '3px solid var(--color-primary)' : '2px solid #e2e8f0',
+                        background: tableNumber === 'takeaway' ? 'var(--gradient-primary)' : 'white',
+                        color: tableNumber === 'takeaway' ? 'white' : '#495057',
+                        fontWeight: tableNumber === 'takeaway' ? 'bold' : '600',
+                        cursor: 'pointer',
+                        fontSize: '0.85rem',
+                        gridColumn: 'span 1'
+                      }}
+                      title="Select Take Away"
+                    >
+                      Take Away
+                    </button>
                   </div>
 
                   {/* Manual Input */}
                   <input
-                    type="number"
-                    min="1"
+                    type="text"
                     required
                     value={tableNumber}
                     onChange={(e) => handleTableNumberChange(e.target.value)}
-                    placeholder="Or enter table number..."
+                    placeholder="Or enter table number or 'takeaway'..."
                     style={{
                       width: '100%',
                       padding: '0.85rem',
@@ -2017,11 +2254,11 @@ const OrderSystem = () => {
                     )) {
                       return false;
                     }
-                    // Check both tableNumber and table_number fields, ensure proper number comparison
+                    // Check both tableNumber and table_number fields, ensure proper comparison
                     const occupiedTableNum = t.tableNumber || t.table_number;
                     if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
-                    return parseInt(occupiedTableNum) === parseInt(tableNumber);
-                  }) && tableNumber && (
+                    return String(occupiedTableNum) === String(tableNumber);
+                  }) && tableNumber && tableNumber !== 'takeaway' && (
                       <div style={{
                         marginTop: '0.5rem',
                         padding: '0.5rem',
@@ -2212,9 +2449,25 @@ const OrderSystem = () => {
                   <CustomerAddressSelector
                     customer={selectedCustomer}
                     selectedAddress={deliveryAddress}
-                    onAddressSelect={(address) => handleDeliveryFieldChange('deliveryAddress', address)}
+                    onAddressSelect={(address) => {
+                      // Handle both string (legacy) and object (new) formats
+                      if (typeof address === 'object' && address.address) {
+                        handleDeliveryFieldChange('deliveryAddress', address.address);
+                        handleDeliveryFieldChange('deliveryNotes', address.notes || '');
+                        handleDeliveryFieldChange('googleMapsLink', address.googleMapsLink || '');
+                      } else {
+                        handleDeliveryFieldChange('deliveryAddress', address);
+                      }
+                    }}
                     onNewAddress={(address) => {
-                      handleDeliveryFieldChange('deliveryAddress', address);
+                      // Handle both string (legacy) and object (new) formats
+                      if (typeof address === 'object' && address.address) {
+                        handleDeliveryFieldChange('deliveryAddress', address.address);
+                        handleDeliveryFieldChange('deliveryNotes', address.notes || '');
+                        handleDeliveryFieldChange('googleMapsLink', address.googleMapsLink || '');
+                      } else {
+                        handleDeliveryFieldChange('deliveryAddress', address);
+                      }
                       // Reload customer to get updated addresses
                       if (selectedCustomer.id) {
                         customerAPI.getById(selectedCustomer.id).then(response => {

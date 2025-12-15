@@ -582,7 +582,20 @@ const CustomerManagement = () => {
                             </div>
                             {addr.notes && (
                               <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
-                                {addr.notes}
+                                <strong>Notes:</strong> {addr.notes}
+                              </div>
+                            )}
+                            {addr.googleMapsLink && (
+                              <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
+                                <strong>Google Maps:</strong>{' '}
+                                <a 
+                                  href={addr.googleMapsLink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                                >
+                                  {addr.googleMapsLink}
+                                </a>
                               </div>
                             )}
                           </div>
@@ -629,7 +642,24 @@ const CustomerManagement = () => {
                         return (
                           <div>
                             {selectedAddr.isDefault && <span style={{ color: '#339af0' }}>● Default Address</span>}
-                            {selectedAddr.notes && <span style={{ marginLeft: '0.5rem' }}>• {selectedAddr.notes}</span>}
+                            {selectedAddr.notes && (
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <strong>Notes:</strong> {selectedAddr.notes}
+                              </div>
+                            )}
+                            {selectedAddr.googleMapsLink && (
+                              <div style={{ marginTop: '0.25rem' }}>
+                                <strong>Google Maps:</strong>{' '}
+                                <a 
+                                  href={selectedAddr.googleMapsLink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#339af0', textDecoration: 'underline' }}
+                                >
+                                  {selectedAddr.googleMapsLink}
+                                </a>
+                              </div>
+                            )}
                           </div>
                         );
                       } else {

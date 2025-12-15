@@ -52,7 +52,7 @@ export const printReceipt = (orderData, printStage) => {
             height: auto !important;
             font-family: 'Courier New', monospace !important;
             font-size: 13px !important; /* INCREASED from 11px */
-            font-weight: 500 !important;
+            font-weight: 600 !important;
             line-height: 1.1 !important;
             -webkit-print-color-adjust: exact !important;
             color: #000000 !important;
@@ -69,7 +69,7 @@ export const printReceipt = (orderData, printStage) => {
             padding: 0.5mm 1mm 2mm 1mm !important; /* Minimal top padding */
             font-family: 'Courier New', monospace !important;
             font-size: 13px !important; /* INCREASED from 11px */
-            font-weight: 500 !important;
+            font-weight: 600 !important;
             line-height: 1.1 !important;
             color: #000000 !important;
             background: #ffffff !important;
@@ -120,7 +120,7 @@ export const printReceipt = (orderData, printStage) => {
           word-wrap: break-word !important;
           overflow-wrap: break-word !important;
           font-size: 13px !important; /* INCREASED */
-          font-weight: 500 !important;
+          font-weight: 600 !important;
         }
         
         /* Horizontal lines - thin style */
@@ -146,7 +146,7 @@ export const printReceipt = (orderData, printStage) => {
         td, th {
           padding: 2px 0 !important;
           font-size: 12px !important;
-          font-weight: 500 !important;
+          font-weight: 600 !important;
           line-height: 1.1 !important;
           vertical-align: top !important;
           box-sizing: border-box !important;
@@ -215,7 +215,7 @@ export const printReceipt = (orderData, printStage) => {
         
         .welcome-text {
           font-size: 14px !important;
-          font-weight: 500 !important;
+          font-weight: 600 !important;
           margin: 2px 0 !important;
           text-align: center !important;
           width: 100% !important;
@@ -255,7 +255,7 @@ export const printReceipt = (orderData, printStage) => {
         .order-info td {
           font-size: 12px !important;
           padding: 1px 0 !important;
-          font-weight: 500 !important;
+          font-weight: 600 !important;
         }
       }
       
@@ -281,7 +281,7 @@ export const printReceipt = (orderData, printStage) => {
           box-shadow: 0 4px 12px rgba(0,0,0,0.1);
           font-family: 'Courier New', monospace;
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 600;
           line-height: 1.1;
           box-sizing: border-box;
           border-radius: 4px;
@@ -307,7 +307,7 @@ export const printReceipt = (orderData, printStage) => {
         .receipt-container .center-text {
           margin: 2px 0;
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 600;
           color: #000000;
         }
         .receipt-container hr {
@@ -322,7 +322,7 @@ export const printReceipt = (orderData, printStage) => {
           padding: 2px 0;
           font-size: 12px;
           line-height: 1.1;
-          font-weight: 500;
+          font-weight: 600;
           word-wrap: break-word;
           overflow-wrap: break-word;
           color: #000000;
@@ -339,7 +339,7 @@ export const printReceipt = (orderData, printStage) => {
         }
         .receipt-container .welcome-text {
           font-size: 14px;
-          font-weight: 500;
+          font-weight: 600;
           margin: 2px 0;
           text-align: center;
           color: #000000;
@@ -459,7 +459,8 @@ const generateHTMLReceipt = (orderData, printStage) => {
     delivery_notes,
     subtotal,
     discount_percent,
-    discountPercent
+    discountPercent,
+    customer
   } = orderData || {};
 
   const orderId = orderData?.id || Date.now();
@@ -472,6 +473,22 @@ const generateHTMLReceipt = (orderData, printStage) => {
   const timeStr = `${displayHours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
   const dateStr = date.toLocaleDateString();
   const isDelivery = order_type === 'delivery';
+  
+  // Extract notes - check order notes first, then customer address notes as fallback
+  let finalDeliveryNotes = delivery_notes || null;
+  if (!finalDeliveryNotes && isDelivery && customer) {
+    // Try to get notes from customer's matching address
+    const addresses = customer.addresses || [];
+    if (addresses.length > 0 && customer_address) {
+      const matchingAddress = addresses.find(addr => 
+        addr.address === customer_address || 
+        addr.address?.toLowerCase() === customer_address?.toLowerCase()
+      );
+      if (matchingAddress && matchingAddress.notes) {
+        finalDeliveryNotes = matchingAddress.notes;
+      }
+    }
+  }
   const displayOrderId = order_number ? `#${order_number}` : `#${orderId}`;
   const deliveryFee = delivery_charge ? Number(delivery_charge) : 0;
   const safeItems = Array.isArray(items) ? items : [];
@@ -538,7 +555,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
           ${!isDelivery && table_number ? `
           <tr>
             <td class="col-item">Table:</td>
-            <td class="col-price">#${table_number}</td>
+            <td class="col-price">${table_number === 'takeaway' ? 'Take Away' : `#${table_number}`}</td>
           </tr>
           ` : ''}
           <tr>
@@ -557,7 +574,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
           ` : ''}
         </table>
 
-        ${(customer_name || customer_phone || customer_address || delivery_notes) ? `
+        ${(customer_name || customer_phone || customer_address || finalDeliveryNotes) ? `
           <!-- CUSTOMER & DELIVERY INFO - Show when available -->
           <div class="header-text-left">${isDelivery ? 'DELIVERY DETAILS' : 'CUSTOMER INFORMATION'}</div>
           <table class="order-info">
@@ -579,11 +596,23 @@ const generateHTMLReceipt = (orderData, printStage) => {
                 <td colspan="2" class="col-item address-cell">Address: ${customer_address}</td>
               </tr>
               ` : ''}
-              ${delivery_notes ? `
+              ${finalDeliveryNotes ? `
               <tr>
-                <td colspan="2" class="col-item address-cell">Notes: ${delivery_notes}</td>
+                <td colspan="2" class="col-item address-cell">Notes / Instructions: ${finalDeliveryNotes}</td>
               </tr>
               ` : ''}
+            </tbody>
+          </table>
+          ` : ''}
+        
+        ${isDelivery && finalDeliveryNotes && !(customer_name || customer_phone || customer_address) ? `
+          <!-- Show notes section even if other fields are missing -->
+          <div class="header-text-left">DELIVERY INSTRUCTIONS</div>
+          <table class="order-info">
+            <tbody>
+              <tr>
+                <td colspan="2" class="col-item address-cell">${finalDeliveryNotes}</td>
+              </tr>
             </tbody>
           </table>
           ` : ''}
@@ -696,7 +725,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
           ${!isDelivery && table_number ? `
           <tr>
             <td class="col-item">Table:</td>
-            <td class="col-price">#${table_number}</td>
+            <td class="col-price">${table_number === 'takeaway' ? 'Take Away' : `#${table_number}`}</td>
           </tr>
           ` : ''}
           <tr>
@@ -772,6 +801,368 @@ const generateHTMLReceipt = (orderData, printStage) => {
   }
 
   return html;
+};
+
+// Combined receipt printing for delivery orders (kitchen + customer in one window)
+export const printCombinedReceipt = (orderData) => {
+  return new Promise((resolve, reject) => {
+    if (!orderData) {
+      console.error('No order data provided for printing');
+      reject(new Error('No order data provided'));
+      return;
+    }
+
+    // Generate both receipts
+    const kitchenReceipt = generateHTMLReceipt(orderData, 'kitchen');
+    const customerReceipt = generateHTMLReceipt(orderData, 'customer');
+    const origin = window.location.origin;
+
+    // Open single window (not _blank to avoid new tab)
+    const w = window.open("", "receiptPrintWindow");
+
+    if (!w) {
+      console.error('Failed to open print window. Please allow popups.');
+      alert('Please allow popups to print receipts. Click OK to continue.');
+      resolve();
+      return;
+    }
+
+    // Combine both receipts with cut line between
+    const combinedHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Receipts - Kitchen & Customer</title>
+      <style>
+        /* RESET EVERYTHING FOR THERMAL PRINTING */
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        
+        @media print {
+          /* ZERO MARGINS - Use full 72mm width */
+          @page {
+            size: 72mm auto;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 72mm !important;
+            height: auto !important;
+            font-family: 'Courier New', monospace !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            line-height: 1.1 !important;
+            -webkit-print-color-adjust: exact !important;
+            color: #000000 !important;
+            background: #ffffff !important;
+            overflow: visible !important;
+          }
+          
+          /* Main receipt container - FULL 72mm WIDTH */
+          .receipt-container {
+            width: 72mm !important;
+            min-width: 72mm !important;
+            max-width: 72mm !important;
+            margin: 0 auto !important;
+            padding: 0.5mm 1mm 2mm 1mm !important;
+            font-family: 'Courier New', monospace !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            line-height: 1.1 !important;
+            color: #000000 !important;
+            background: #ffffff !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            display: block !important;
+            box-sizing: border-box !important;
+          }
+          
+          /* Cut line between receipts */
+          .cut-line {
+            width: 72mm !important;
+            margin: 5mm 0 !important;
+            border: none !important;
+            border-top: 1px dashed #000 !important;
+            page-break-after: always !important;
+          }
+          
+          .header-text {
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            margin: 4px 0 !important;
+            text-align: center !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          
+          .header-text-left {
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            margin: 4px 0 !important;
+            text-align: left !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          
+          .center-text {
+            text-align: center !important;
+            width: 100% !important;
+            margin: 2px 0 !important;
+            box-sizing: border-box !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+          }
+          
+          hr {
+            border: none !important;
+            border-top: 0.5px solid #000 !important;
+            margin: 5px 0 !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          
+          table {
+            width: 100% !important;
+            max-width: 100% !important;
+            border-collapse: collapse !important;
+            margin: 4px 0 !important;
+            table-layout: fixed !important;
+            box-sizing: border-box !important;
+            font-size: 12px !important;
+          }
+          
+          td, th {
+            padding: 2px 0 !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            line-height: 1.1 !important;
+            vertical-align: top !important;
+            box-sizing: border-box !important;
+            word-wrap: normal !important;
+            overflow-wrap: normal !important;
+            word-break: keep-all !important;
+            hyphens: auto !important;
+          }
+          
+          .col-item {
+            width: 55% !important;
+            max-width: 55% !important;
+            text-align: left !important;
+            padding-left: 0 !important;
+            padding-right: 1px !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            box-sizing: border-box !important;
+          }
+          
+          .col-item.address-cell {
+            width: 100% !important;
+            max-width: 100% !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            text-overflow: clip !important;
+            box-sizing: border-box !important;
+          }
+          
+          .col-qty {
+            width: 15% !important;
+            max-width: 15% !important;
+            text-align: center !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            padding-left: 1px !important;
+            padding-right: 1px !important;
+            box-sizing: border-box !important;
+          }
+          
+          .col-price {
+            width: 30% !important;
+            max-width: 30% !important;
+            text-align: right !important;
+            padding-left: 1px !important;
+            padding-right: 0 !important;
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            overflow-wrap: break-word !important;
+            overflow: visible !important;
+            box-sizing: border-box !important;
+          }
+          
+          .logo-container {
+            text-align: center !important;
+            width: 100% !important;
+            margin: 2px 0 3px 0 !important;
+            box-sizing: border-box !important;
+          }
+          
+          .welcome-text {
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            margin: 2px 0 !important;
+            text-align: center !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+          }
+          
+          .logo-image {
+            max-width: 100% !important;
+            width: auto !important;
+            height: auto !important;
+            max-height: 25mm !important;
+            display: block !important;
+            margin: 3px auto !important;
+            box-sizing: border-box !important;
+          }
+          
+          .ascii-art {
+            font-family: monospace !important;
+            font-size: 11px !important;
+            line-height: 1.0 !important;
+            white-space: pre !important;
+            margin: 4px 0 !important;
+            text-align: center !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+            overflow: hidden !important;
+          }
+          
+          .spacer {
+            height: 2px !important;
+            display: block !important;
+          }
+          
+          .order-info td {
+            font-size: 12px !important;
+            padding: 1px 0 !important;
+            font-weight: 600 !important;
+          }
+        }
+        
+        /* Screen preview */
+        @media screen {
+          body {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            background: #f5f5f5;
+            padding: 5px 10px;
+            margin: 0;
+          }
+          .receipt-container {
+            width: 400px;
+            min-width: 400px;
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 10px 15px 20px 15px;
+            background: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.1;
+            box-sizing: border-box;
+            border-radius: 4px;
+            color: #000000;
+          }
+          .cut-line {
+            width: 400px;
+            margin: 20px auto;
+            border: none;
+            border-top: 2px dashed #000;
+            display: block;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      ${kitchenReceipt}
+      <div class="cut-line"></div>
+      ${customerReceipt}
+      <script>
+        window.onload = function() {
+          var images = document.getElementsByTagName('img');
+          var imagesToLoad = images.length;
+          var imagesLoaded = 0;
+          
+          if (imagesToLoad === 0) {
+            printReceipt();
+          } else {
+            for (var i = 0; i < images.length; i++) {
+              if (images[i].complete) {
+                imagesLoaded++;
+              } else {
+                images[i].onload = function() {
+                  imagesLoaded++;
+                  if (imagesLoaded === imagesToLoad) {
+                    printReceipt();
+                  }
+                };
+                images[i].onerror = function() {
+                  imagesLoaded++;
+                  if (imagesLoaded === imagesToLoad) {
+                    printReceipt();
+                  }
+                };
+              }
+            }
+            
+            if (imagesLoaded === imagesToLoad) {
+              printReceipt();
+            }
+            
+            setTimeout(function() {
+              if (imagesLoaded < imagesToLoad) {
+                printReceipt();
+              }
+            }, 2000);
+          }
+          
+          function printReceipt() {
+            window.focus();
+            setTimeout(function() {
+              window.print();
+              var printCompleted = false;
+              var closeWindow = function() {
+                if (!printCompleted) {
+                  printCompleted = true;
+                  setTimeout(function() {
+                    window.close();
+                  }, 500);
+                }
+              };
+              window.addEventListener('afterprint', closeWindow);
+              setTimeout(closeWindow, 2000);
+            }, 100);
+          }
+        };
+      </script>
+    </body>
+    </html>
+    `;
+
+    w.document.write(combinedHTML);
+    w.document.close();
+
+    setTimeout(() => {
+      resolve();
+    }, 100);
+  });
 };
 
 // React component for preview
@@ -859,7 +1250,7 @@ const Receipt = ({ orderData, printStage }) => {
     padding: '10px 15px 20px 15px',
     fontFamily: "'Inter', monospace",
     fontSize: '13px',
-  fontWeight: '500',
+  fontWeight: '600',
     lineHeight: '1.1',
     color: '#000000',
     backgroundColor: '#fff',
@@ -902,7 +1293,7 @@ const Receipt = ({ orderData, printStage }) => {
     margin: '2px 0',
     width: '100%',
     fontSize: '10px',
-  fontWeight: '500',
+  fontWeight: '600',
     boxSizing: 'border-box',
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
@@ -926,7 +1317,7 @@ const Receipt = ({ orderData, printStage }) => {
     textAlign: 'center',
     width: '100%',
     color: '#000000',
-    fontWeight: '500'
+    fontWeight: '600'
   };
 
   const tableStyle = {
@@ -942,7 +1333,7 @@ const Receipt = ({ orderData, printStage }) => {
   const tdLeftStyle = {
     padding: '2px 0',
     fontSize: '12px',
-  fontWeight: '500',
+  fontWeight: '600',
     lineHeight: '1.1',
     textAlign: 'left',
     width: '55%',
@@ -960,7 +1351,7 @@ const Receipt = ({ orderData, printStage }) => {
   const tdCenterStyle = {
     padding: '2px 0',
     fontSize: '12px',
-  fontWeight: '500',
+  fontWeight: '600',
     lineHeight: '1.1',
     textAlign: 'center',
     width: '15%',
@@ -976,7 +1367,7 @@ const Receipt = ({ orderData, printStage }) => {
   const tdRightStyle = {
     padding: '2px 0',
     fontSize: '12px',
-  fontWeight: '500',
+  fontWeight: '600',
     lineHeight: '1.1',
     textAlign: 'right',
     width: '30%',
@@ -995,7 +1386,7 @@ const Receipt = ({ orderData, printStage }) => {
     ...tdLeftStyle,
     padding: '1px 0',
     fontSize: '12px',
-    fontWeight: '500',
+    fontWeight: '600',
     wordWrap: 'break-word',
     overflowWrap: 'break-word'
   };
@@ -1036,7 +1427,7 @@ const Receipt = ({ orderData, printStage }) => {
             {!isDelivery && table_number && (
               <tr>
                 <td style={orderInfoTdStyle}>Table:</td>
-                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>#{table_number}</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{table_number === 'takeaway' ? 'Take Away' : `#${table_number}`}</td>
               </tr>
             )}
             <tr>
@@ -1079,7 +1470,7 @@ const Receipt = ({ orderData, printStage }) => {
                   <tr>
                     <td colSpan="2" style={{
                       ...tdLeftStyle,
-                      fontWeight: '500',
+                      fontWeight: '600',
                       whiteSpace: 'normal',
                       wordWrap: 'break-word',
                       overflowWrap: 'break-word',
@@ -1093,7 +1484,7 @@ const Receipt = ({ orderData, printStage }) => {
                   <tr>
                     <td colSpan="2" style={{
                       ...tdLeftStyle,
-                      fontWeight: '500',
+                      fontWeight: '600',
                       whiteSpace: 'normal',
                       wordWrap: 'break-word',
                       overflowWrap: 'break-word',
@@ -1237,7 +1628,7 @@ const Receipt = ({ orderData, printStage }) => {
             {!isDelivery && table_number && (
               <tr>
                 <td style={orderInfoTdStyle}>Table:</td>
-                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>#{table_number}</td>
+                <td style={{ ...orderInfoTdStyle, textAlign: 'right', width: '30%' }}>{table_number === 'takeaway' ? 'Take Away' : `#${table_number}`}</td>
               </tr>
             )}
             <tr>

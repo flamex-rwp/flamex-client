@@ -1,15 +1,80 @@
 // Offline sync utility for syncing data when internet is restored
 import { getOfflineOrders, deleteOfflineOrder, markOrderSynced } from './offlineDB';
 import api from '../services/api';
+import { API_BASE_URL } from '../services/api';
 
 // Global sync lock to prevent duplicate syncing
 let globalSyncInProgress = false;
 let lastSyncTimestamp = 0;
 const MIN_SYNC_INTERVAL = 3000; // Minimum 3 seconds between syncs
 
-// Check if the browser is online
-export const isOnline = () => {
-  return navigator.onLine;
+// Cache for server connectivity check (avoid multiple simultaneous checks)
+let serverConnectivityCache = {
+  isOnline: navigator.onLine,
+  lastCheck: 0,
+  checking: false
+};
+const CONNECTIVITY_CHECK_INTERVAL = 5000; // Check every 5 seconds max
+const CONNECTIVITY_CHECK_TIMEOUT = 3000; // 3 second timeout
+
+// Check if the browser is online AND server is reachable
+export const isOnline = async () => {
+  // First check: navigator.onLine (fast check)
+  if (!navigator.onLine) {
+    return false;
+  }
+
+  // Second check: Test server connectivity (cached for performance)
+  const now = Date.now();
+  if (now - serverConnectivityCache.lastCheck < CONNECTIVITY_CHECK_INTERVAL && !serverConnectivityCache.checking) {
+    return serverConnectivityCache.isOnline;
+  }
+
+  // If already checking, return cached result
+  if (serverConnectivityCache.checking) {
+    return serverConnectivityCache.isOnline;
+  }
+
+  // Perform connectivity check
+  serverConnectivityCache.checking = true;
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONNECTIVITY_CHECK_TIMEOUT);
+    
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-cache'
+    });
+    
+    clearTimeout(timeoutId);
+    
+    const isServerOnline = response.ok || response.status < 500;
+    serverConnectivityCache = {
+      isOnline: isServerOnline,
+      lastCheck: now,
+      checking: false
+    };
+    
+    return isServerOnline;
+  } catch (error) {
+    // Network error or timeout - server is not reachable
+    serverConnectivityCache = {
+      isOnline: false,
+      lastCheck: now,
+      checking: false
+    };
+    return false;
+  }
+};
+
+// Synchronous version for immediate checks (uses cached result)
+export const isOnlineSync = () => {
+  if (!navigator.onLine) {
+    return false;
+  }
+  return serverConnectivityCache.isOnline !== false; // Default to true if not checked yet
 };
 
 // Sync all offline orders to the server

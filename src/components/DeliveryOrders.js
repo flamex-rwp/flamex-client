@@ -98,8 +98,8 @@ const DeliveryOrders = () => {
       let apiOrders = [];
       if (online) {
         try {
-          const response = await ordersAPI.getDeliveryOrders(params);
-          apiOrders = response.data.data || [];
+          const response = await ordersAPI.getDeliveryOrders({ ...params, useCache: false, disableCacheFallback: true });
+          apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
           
           // Merge preserved offline status from IndexedDB into API orders
           // This ensures that orders with offline status updates don't revert to pending
@@ -109,10 +109,10 @@ const DeliveryOrders = () => {
         }
       }
 
-      const offlineOrdersData = await getOfflineOrders();
-      
-      const offlineOrders = offlineOrdersData
-        .filter(offlineOrder => !offlineOrder.synced)
+      // Fetch offline orders only when offline; skip when online to avoid stale local orders
+      const offlineOrders = online ? [] : (
+        await getOfflineOrders()
+      ).filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
           const isDelivery = orderData.order_type === 'delivery' || orderData.orderType === 'delivery';
@@ -216,11 +216,11 @@ const DeliveryOrders = () => {
       if (online) {
         try {
           const [pendingResponse, completedResponse] = await Promise.all([
-            ordersAPI.getDeliveryOrders({ ...params, status: 'pending' }),
-            ordersAPI.getDeliveryOrders({ ...params, status: 'completed' })
+            ordersAPI.getDeliveryOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true }),
+            ordersAPI.getDeliveryOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true })
           ]);
-          pendingApiOrders = pendingResponse.data.data || [];
-          completedApiOrders = completedResponse.data.data || [];
+          pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
           
           // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
           // For delivery orders, also ensure delivery_status is 'delivered' when order is completed
@@ -343,7 +343,12 @@ const DeliveryOrders = () => {
         params.start = startDate;
         params.end = endDate;
       }
-      const response = await ordersAPI.getDeliveryStats(params);
+      if (!online) {
+        setStats({ ...defaultStats });
+        return;
+      }
+
+      const response = await ordersAPI.getDeliveryStats({ params, useCache: false, disableCacheFallback: true });
       const data = response.data?.data || response.data || {};
       // Always merge with defaults to ensure all fields exist
       const merged = mergeStats(data);
@@ -743,43 +748,55 @@ const DeliveryOrders = () => {
         throw new Error('Invalid order ID');
       }
       
-      const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId || o.id === orderIdStr);
+      const targetOrder = [...pendingOrders, ...completedOrders].find(o => 
+        String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId
+      );
       
       // Update local state immediately for better UX (no page refresh)
       const updateLocalState = () => {
         const isDelivered = newStatus === 'delivered';
+        // For delivery orders, always update deliveryStatus based on newStatus
+        // If newStatus is a delivery status (out_for_delivery, delivered), use it
+        // Otherwise, use newStatus for delivery status too (pending, preparing, ready)
+        const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+        const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
+        
         const updatedOrder = {
           ...targetOrder,
           orderStatus: isDelivered ? 'completed' : newStatus,
           order_status: isDelivered ? 'completed' : newStatus,
-          deliveryStatus: ['out_for_delivery', 'delivered'].includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status),
-          delivery_status: ['out_for_delivery', 'delivered'].includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status)
+          deliveryStatus: newDeliveryStatus,
+          delivery_status: newDeliveryStatus
         };
         
         // Move order between tabs if needed
-        const shouldBeCompleted = isDelivered || (newStatus === 'completed');
+        // For delivery orders, completed means deliveryStatus is 'delivered'
+        const shouldBeCompleted = isDelivered || (newStatus === 'completed') || (newDeliveryStatus === 'delivered');
         const isCurrentlyPending = activeTab === 'pending';
+        
+        // Helper function to match order IDs
+        const matchesOrderId = (o) => String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId;
         
         if (shouldBeCompleted && isCurrentlyPending) {
           // Move from pending to completed
-          setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+          setPendingOrders(prev => prev.filter(o => !matchesOrderId(o)));
           setCompletedOrders(prev => {
-            const exists = prev.find(o => o.id === orderId);
-            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+            const exists = prev.find(matchesOrderId);
+            return exists ? prev.map(o => matchesOrderId(o) ? updatedOrder : o) : [...prev, updatedOrder];
           });
         } else if (!shouldBeCompleted && !isCurrentlyPending) {
           // Move from completed to pending
-          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => prev.filter(o => !matchesOrderId(o)));
           setPendingOrders(prev => {
-            const exists = prev.find(o => o.id === orderId);
-            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+            const exists = prev.find(matchesOrderId);
+            return exists ? prev.map(o => matchesOrderId(o) ? updatedOrder : o) : [...prev, updatedOrder];
           });
         } else {
           // Update in current tab
           if (activeTab === 'pending') {
-            setPendingOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+            setPendingOrders(prev => prev.map(o => matchesOrderId(o) ? updatedOrder : o));
           } else {
-            setCompletedOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+            setCompletedOrders(prev => prev.map(o => matchesOrderId(o) ? updatedOrder : o));
           }
         }
       };
@@ -795,7 +812,12 @@ const DeliveryOrders = () => {
         // CRITICAL: Use the offlineId from the target order to ensure we can find it during sync
         const offlineIdForSync = targetOrder?.offlineId || realOrderId;
         
-        if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+        // For delivery orders, always update delivery status
+        const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+        const isDeliveryStatus = deliveryStatuses.includes(newStatus);
+        
+        if (isDeliveryStatus) {
+          // Update delivery status
           await addPendingOperation({
             type: 'update_delivery_status',
             endpoint: `/api/orders/${realOrderId}/delivery/status`,
@@ -804,8 +826,9 @@ const DeliveryOrders = () => {
             offlineId: offlineIdForSync // Store offlineId for sync matching
           });
           
-          // If delivered, also mark order as completed
+          // Also update order status
           if (newStatus === 'delivered') {
+            // If delivered, mark order as completed
             await addPendingOperation({
               type: 'update_order_status',
               endpoint: `/api/orders/${realOrderId}/status`,
@@ -813,8 +836,18 @@ const DeliveryOrders = () => {
               data: { order_status: 'completed' },
               offlineId: offlineIdForSync // Store offlineId for sync matching
             });
+          } else {
+            // If changing from delivered to something else, update order status too
+            await addPendingOperation({
+              type: 'update_order_status',
+              endpoint: `/api/orders/${realOrderId}/status`,
+              method: 'PUT',
+              data: { order_status: newStatus },
+              offlineId: offlineIdForSync // Store offlineId for sync matching
+            });
           }
         } else {
+          // For non-delivery statuses, update order status
           await addPendingOperation({
             type: 'update_order_status',
             endpoint: `/api/orders/${realOrderId}/status`,
@@ -822,20 +855,35 @@ const DeliveryOrders = () => {
             data: { order_status: newStatus },
             offlineId: offlineIdForSync // Store offlineId for sync matching
           });
+          // Also update delivery status to match
+          await addPendingOperation({
+            type: 'update_delivery_status',
+            endpoint: `/api/orders/${realOrderId}/delivery/status`,
+            method: 'PUT',
+            data: { deliveryStatus: newStatus },
+            offlineId: offlineIdForSync // Store offlineId for sync matching
+          });
         }
         
         // Also update local offline order if it exists - CRITICAL: Update with offlineId
         if (targetOrder?.offline) {
+          // For delivery orders, update both order_status and delivery_status
+          const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+          const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
+          
           await updateOfflineOrder(offlineIdForSync, {
             order_status: newStatus === 'delivered' ? 'completed' : newStatus,
             orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
-            delivery_status: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
-            deliveryStatus: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
+            delivery_status: newDeliveryStatus,
+            deliveryStatus: newDeliveryStatus,
             offlineStatusUpdated: true
           });
         }
         
         updateLocalState();
+        // Refresh stats and dispatch event to update badges
+        await fetchStats();
+        window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
         showSuccess(`Status update saved offline. It will sync when you are back online.`);
         setUpdatingStatusId(null);
         isUpdatingStatus.current = false;
@@ -844,32 +892,55 @@ const DeliveryOrders = () => {
       
       // Online: try API first
       if (targetOrder?.offline) {
+        // For delivery orders, update both order_status and delivery_status
+        const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+        const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
+        
         await updateOfflineOrder(targetOrder.offlineId || orderIdStr, {
           order_status: newStatus === 'delivered' ? 'completed' : newStatus,
           orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
-          delivery_status: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined),
-          deliveryStatus: newStatus === 'delivered' ? 'delivered' : (newStatus === 'out_for_delivery' ? 'out_for_delivery' : undefined)
+          delivery_status: newDeliveryStatus,
+          deliveryStatus: newDeliveryStatus
         });
         updateLocalState();
+        // Refresh stats and dispatch event to update badges
+        await fetchStats();
+        window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
         showSuccess(`Offline order status updated to ${newStatus.replace(/_/g, ' ')}`);
       } else {
         try {
-          if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+          // For delivery orders, always update delivery status
+          const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+          const isDeliveryStatus = deliveryStatuses.includes(newStatus);
+          
+          if (isDeliveryStatus) {
+            // Update delivery status for delivery orders
             await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
 
-            // If delivered, also mark order as completed to remove from pending list
+            // If delivered, also mark order as completed
             if (newStatus === 'delivered') {
               await ordersAPI.updateOrderStatus(orderIdStr, 'completed');
+            } else {
+              // If changing from delivered to something else, update order status too
+              await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
             }
           } else {
-            // pending, preparing
+            // For non-delivery statuses, update order status
             await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
+            // Also update delivery status to match
+            await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
           }
 
           updateLocalState();
           showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}`);
-          // Only refresh stats, not orders (already updated locally)
-          fetchStats();
+          // Refresh stats and dispatch event to update badges
+          await fetchStats();
+          // Dispatch event to refresh badges in ManagerPortal
+          window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
+          // Refresh orders to ensure consistency with server (use a small delay to let local state update first)
+          setTimeout(async () => {
+            await fetchAllOrders();
+          }, 500);
         } catch (error) {
           // Revert local state on error
           const revertOrder = { ...targetOrder };
@@ -885,13 +956,20 @@ const DeliveryOrders = () => {
               ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
               : orderIdStr;
             
-            if (['out_for_delivery', 'delivered'].includes(newStatus)) {
+            // For delivery orders, always update delivery status
+            const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
+            const isDeliveryStatus = deliveryStatuses.includes(newStatus);
+            
+            if (isDeliveryStatus) {
+              // Update delivery status
               await addPendingOperation({
                 type: 'update_delivery_status',
                 endpoint: `/api/orders/${realOrderId}/delivery/status`,
                 method: 'PUT',
                 data: { deliveryStatus: newStatus }
               });
+              
+              // Also update order status
               if (newStatus === 'delivered') {
                 await addPendingOperation({
                   type: 'update_order_status',
@@ -899,13 +977,28 @@ const DeliveryOrders = () => {
                   method: 'PUT',
                   data: { order_status: 'completed' }
                 });
+              } else {
+                await addPendingOperation({
+                  type: 'update_order_status',
+                  endpoint: `/api/orders/${realOrderId}/status`,
+                  method: 'PUT',
+                  data: { order_status: newStatus }
+                });
               }
             } else {
+              // For non-delivery statuses, update order status
               await addPendingOperation({
                 type: 'update_order_status',
                 endpoint: `/api/orders/${realOrderId}/status`,
                 method: 'PUT',
                 data: { order_status: newStatus }
+              });
+              // Also update delivery status to match
+              await addPendingOperation({
+                type: 'update_delivery_status',
+                endpoint: `/api/orders/${realOrderId}/delivery/status`,
+                method: 'PUT',
+                data: { deliveryStatus: newStatus }
               });
             }
             updateLocalState();
@@ -1440,16 +1533,171 @@ const DeliveryOrders = () => {
                       <p style={{ margin: '0.25rem 0', fontSize: '0.9rem', fontWeight: '600', color: '#2d3748' }}>
                         👤 {order.customer?.name || order.customer_name}
                       </p>
-                      {(order.customer?.phone || order.customer_phone) && (
-                        <p style={{ margin: '0.25rem 0', fontSize: '0.85rem', color: '#6c757d' }}>
-                          📞 {order.customer?.phone || order.customer_phone}
-                        </p>
-                      )}
-                      {(order.deliveryAddress || order.delivery_address) && (
-                        <p style={{ margin: '0.25rem 0', fontSize: '0.85rem', color: '#6c757d' }}>
-                          📍 {order.deliveryAddress || order.delivery_address}
-                        </p>
-                      )}
+                      {(() => {
+                        const phone = order.customer?.phone || order.customer_phone;
+                        const address = order.deliveryAddress || order.delivery_address;
+                        // Try to get notes and Google Maps link from order first, then fallback to customer's address
+                        let notes = order.deliveryNotes || order.delivery_notes || '';
+                        let googleLink = order.googleMapsLink || order.google_maps_link || '';
+                        
+                        // If order doesn't have notes/googleLink, try to get from customer's address
+                        if ((!notes || !googleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
+                          const matchingAddress = order.customer.addresses.find(addr => 
+                            addr.address === address || addr.address?.toLowerCase() === address?.toLowerCase()
+                          );
+                          if (matchingAddress) {
+                            if (!notes && matchingAddress.notes) notes = matchingAddress.notes;
+                            if (!googleLink && matchingAddress.googleMapsLink) googleLink = matchingAddress.googleMapsLink;
+                          }
+                        }
+                        
+                        const copyContainerId = `copy-container-${order.id || order.order_number || Math.random()}`;
+                        
+                        const handleCopy = async () => {
+                          // Get fresh values from order object to ensure we have the latest data
+                          let currentNotes = order.deliveryNotes || order.delivery_notes || order.notes || '';
+                          let currentGoogleLink = order.googleMapsLink || order.google_maps_link || '';
+                          
+                          // Fallback to customer's address if order doesn't have it
+                          if ((!currentNotes || !currentGoogleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
+                            const matchingAddress = order.customer.addresses.find(addr => 
+                              addr.address === address || addr.address?.toLowerCase() === address?.toLowerCase()
+                            );
+                            if (matchingAddress) {
+                              if (!currentNotes && matchingAddress.notes) currentNotes = matchingAddress.notes;
+                              if (!currentGoogleLink && matchingAddress.googleMapsLink) currentGoogleLink = matchingAddress.googleMapsLink;
+                            }
+                          }
+                          
+                          let copyText = '';
+                          if (phone) copyText += `Phone: ${phone}`;
+                          if (address) {
+                            if (copyText) copyText += '\n';
+                            copyText += `Address: ${address}`;
+                          }
+                          if (currentNotes && currentNotes.trim()) {
+                            if (copyText) copyText += '\n\n';
+                            copyText += `Notes: ${currentNotes}`;
+                          }
+                          if (currentGoogleLink && currentGoogleLink.trim()) {
+                            if (copyText) copyText += '\n\n';
+                            copyText += `Google Maps: ${currentGoogleLink}`;
+                          }
+                          
+                          try {
+                            await navigator.clipboard.writeText(copyText);
+                            showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                          } catch (err) {
+                            // Fallback for older browsers
+                            const textArea = document.createElement('textarea');
+                            textArea.value = copyText;
+                            document.body.appendChild(textArea);
+                            textArea.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                          }
+                        };
+                        
+                        return (
+                          <div 
+                            id={copyContainerId}
+                            style={{ position: 'relative' }}
+                                    onMouseEnter={(e) => {
+                                      const container = e.currentTarget;
+                                      const phoneEl = container.querySelector('.copy-highlight-phone');
+                                      const addressEl = container.querySelector('.copy-highlight-address');
+                                      if (phoneEl) {
+                                        phoneEl.style.backgroundColor = '#fff3cd';
+                                      }
+                                      if (addressEl) {
+                                        addressEl.style.backgroundColor = '#fff3cd';
+                                      }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      const container = e.currentTarget;
+                                      const phoneEl = container.querySelector('.copy-highlight-phone');
+                                      const addressEl = container.querySelector('.copy-highlight-address');
+                                      if (phoneEl) {
+                                        phoneEl.style.backgroundColor = 'transparent';
+                                      }
+                                      if (addressEl) {
+                                        addressEl.style.backgroundColor = 'transparent';
+                                      }
+                                    }}
+                          >
+                            {phone && (
+                              <p 
+                                className="copy-highlight-phone"
+                                style={{ 
+                                  margin: '0.25rem 0', 
+                                  fontSize: '0.85rem', 
+                                  color: '#6c757d',
+                                  padding: '0.25rem',
+                                  borderRadius: '4px',
+                                  transition: 'background-color 0.2s ease'
+                                }}
+                              >
+                                📞 {phone}
+                              </p>
+                            )}
+                            {address && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.25rem 0' }}>
+                                <p 
+                                  className="copy-highlight-address"
+                                  style={{ 
+                                    margin: 0, 
+                                    fontSize: '0.85rem', 
+                                    color: '#6c757d', 
+                                    flex: 1,
+                                    padding: '0.25rem',
+                                    borderRadius: '4px',
+                                    transition: 'background-color 0.2s ease'
+                                  }}
+                                >
+                                  📍 {address}
+                                </p>
+                                <button
+                                  onClick={handleCopy}
+                                  style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    padding: '0.25rem',
+                                    fontSize: '1rem',
+                                    color: '#495057',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'transform 0.2s ease'
+                                  }}
+                                  title="Copy phone number, address, notes, and Google Maps link"
+                                >
+                                  📋
+                                </button>
+                              </div>
+                            )}
+                            {notes && (
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
+                                <strong>Notes:</strong> {notes}
+                              </div>
+                            )}
+                            {googleLink && (
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
+                                <strong>Google Maps:</strong>{' '}
+                                <a 
+                                  href={googleLink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                                >
+                                  {googleLink}
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                   {/* Status Badges */}
@@ -1537,7 +1785,7 @@ const DeliveryOrders = () => {
 
               {/* Delivery Notes */}
               {
-                (order.deliveryNotes || order.delivery_notes) && (
+                (order.deliveryNotes || order.delivery_notes || order.googleMapsLink || order.google_maps_link) && (
                   <div style={{
                     marginTop: '0.75rem',
                     padding: '0.75rem',
@@ -1546,7 +1794,24 @@ const DeliveryOrders = () => {
                     fontSize: '0.85rem',
                     color: '#7c2d12'
                   }}>
-                    <strong>Notes:</strong> {order.deliveryNotes || order.delivery_notes}
+                    {order.deliveryNotes || order.delivery_notes ? (
+                      <div style={{ marginBottom: order.googleMapsLink || order.google_maps_link ? '0.5rem' : '0' }}>
+                        <strong>Notes:</strong> {order.deliveryNotes || order.delivery_notes}
+                      </div>
+                    ) : null}
+                    {order.googleMapsLink || order.google_maps_link ? (
+                      <div>
+                        <strong>Google Maps:</strong>{' '}
+                        <a 
+                          href={order.googleMapsLink || order.google_maps_link} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                        >
+                          {order.googleMapsLink || order.google_maps_link}
+                        </a>
+                      </div>
+                    ) : null}
                   </div>
                 )
               }
@@ -1704,11 +1969,10 @@ const DeliveryOrders = () => {
                     </label>
                     <select
                       value={(() => {
-                        const dStatus = order.deliveryStatus || order.delivery_status;
-                        if (dStatus === 'out_for_delivery' || dStatus === 'delivered') return dStatus;
-                        // If order is completed but delivery isn't set, it might just be 'completed' which isn't an option?
-                        // Assuming 'delivered' is the target state for completed delivery orders
-                        return 'delivered';
+                        const dStatus = order.deliveryStatus || order.delivery_status || 'pending';
+                        // Return the actual delivery status if it's a valid option, otherwise default to pending
+                        const validStatuses = ['pending', 'preparing', 'out_for_delivery', 'delivered'];
+                        return validStatuses.includes(dStatus) ? dStatus : 'pending';
                       })()}
                       onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
                       disabled={updatingStatusId === order.id}

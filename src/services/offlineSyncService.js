@@ -1,5 +1,5 @@
 // Unified offline sync service for complete PWA offline-first architecture
-import api from './api';
+import api, { API_BASE_URL } from './api';
 import { customerAPI } from './customerAPI';
 import { ordersAPI } from './api';
 import {
@@ -20,46 +20,88 @@ import {
   getSyncMetadata,
   saveCustomer
 } from '../utils/offlineDB';
+import { clearAllCache } from './cacheService';
 
 // Sync configuration
 const SYNC_INTERVAL = 30000; // 30 seconds polling interval for pending operations (quick sync)
 const DATA_SYNC_INTERVAL = 120000; // 2 minutes for full data sync (customers, addresses, orders)
-const MAX_RETRIES = 3;
 const SYNC_BATCH_SIZE = 5; // Process 5 operations at a time
 
 // Global sync state
 let syncInProgress = false;
 let syncIntervalId = null;
+let cacheClearIntervalId = null;
 let lastSyncTime = null;
 
-// Check if online
-export const isOnline = () => {
-  return navigator.onLine;
+// Cache for server connectivity check (avoid multiple simultaneous checks)
+let serverConnectivityCache = {
+  isOnline: navigator.onLine,
+  lastCheck: 0,
+  checking: false
+};
+const CONNECTIVITY_CHECK_INTERVAL = 5000; // Check every 5 seconds max
+const CONNECTIVITY_CHECK_TIMEOUT = 3000; // 3 second timeout
+
+// Check if the browser is online AND server is reachable
+export const isOnline = async () => {
+  // First check: navigator.onLine (fast check)
+  if (!navigator.onLine) {
+    return false;
+  }
+
+  // Second check: Test server connectivity (cached for performance)
+  const now = Date.now();
+  if (now - serverConnectivityCache.lastCheck < CONNECTIVITY_CHECK_INTERVAL && !serverConnectivityCache.checking) {
+    return serverConnectivityCache.isOnline;
+  }
+
+  // If already checking, return cached result
+  if (serverConnectivityCache.checking) {
+    return serverConnectivityCache.isOnline;
+  }
+
+  // Perform connectivity check
+  serverConnectivityCache.checking = true;
+  
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONNECTIVITY_CHECK_TIMEOUT);
+    
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-cache'
+    });
+    
+    clearTimeout(timeoutId);
+    
+    const isServerOnline = response.ok || response.status < 500;
+    serverConnectivityCache = {
+      isOnline: isServerOnline,
+      lastCheck: now,
+      checking: false
+    };
+    
+    return isServerOnline;
+  } catch (error) {
+    // Network error or timeout - server is not reachable
+    serverConnectivityCache = {
+      isOnline: false,
+      lastCheck: now,
+      checking: false
+    };
+    return false;
+  }
 };
 
-// Transform order data to match backend API schema
-const transformOrderForAPI = (order) => {
-  return {
-    items: (order.items || order.orderItems || []).map(item => ({
-      menuItemId: item.menuItemId || item.id,
-      quantity: parseInt(item.quantity) || 1,
-      price: parseFloat(item.price) || 0
-    })),
-    totalAmount: parseFloat(order.totalAmount || order.total_amount || 0),
-    paymentMethod: order.paymentMethod || order.payment_method || 'cash',
-    amountTaken: order.amountTaken || order.amount_taken ? parseFloat(order.amountTaken || order.amount_taken) : undefined,
-    returnAmount: order.returnAmount || order.return_amount ? parseFloat(order.returnAmount || order.return_amount) : undefined,
-    orderType: order.orderType || order.order_type || 'dine_in',
-    customerId: order.customerId || order.customer_id,
-    deliveryAddress: order.deliveryAddress || order.delivery_address,
-    deliveryNotes: order.deliveryNotes || order.delivery_notes,
-    deliveryCharge: order.deliveryCharge || order.delivery_charge ? parseFloat(order.deliveryCharge || order.delivery_charge) : 0,
-    paymentStatus: order.paymentStatus || order.payment_status || 'pending',
-    specialInstructions: order.specialInstructions || order.special_instructions,
-    tableNumber: order.tableNumber || order.table_number,
-    discountPercent: order.discountPercent || order.discount_percent || 0
-  };
+// Synchronous version for immediate checks (uses cached result)
+export const isOnlineSync = () => {
+  if (!navigator.onLine) {
+    return false;
+  }
+  return serverConnectivityCache.isOnline !== false; // Default to true if not checked yet
 };
+
 
 // Process a single pending operation
 const processOperation = async (operation) => {
@@ -156,7 +198,7 @@ const processOperation = async (operation) => {
       if (!endpoint) return endpoint;
       
       // Check if endpoint contains an OFFLINE- ID
-      const offlineIdMatch = endpoint.match(/\/orders\/(OFFLINE-[^\/]+)/);
+      const offlineIdMatch = endpoint.match(/\/orders\/(OFFLINE-[^/]+)/);
       if (offlineIdMatch && offlineIdMatch[1]) {
         const offlineId = offlineIdMatch[1];
         
@@ -271,7 +313,7 @@ const processOperation = async (operation) => {
       const idForMark = offlineId || orderNumber || serverOrder.id;
       
       if (!offlineId) {
-        const match = operation.endpoint?.match(/\/orders\/([^\/]+)\/delivery\/status/);
+        const match = operation.endpoint?.match(/\/orders\/([^/]+)\/delivery\/status/);
         if (match && match[1]) {
           const extractedId = match[1];
           if (extractedId.startsWith('OFFLINE-')) {
@@ -864,11 +906,11 @@ export const performFullSync = async () => {
 
     // 2. Then fetch fresh data (in parallel where possible)
     // Note: syncCustomers now includes addresses, so it may take longer
-    const [menuItems, categories, customers, tables] = await Promise.all([
+    const [menuItems, categories, customers] = await Promise.all([
       syncMenuItems(),
       syncCategories(),
       syncCustomers(), // This now fetches and caches customer addresses too
-      syncTableAvailability()
+      syncTableAvailability() // Sync tables but don't need to store result
     ]);
 
 
@@ -959,6 +1001,15 @@ export const startAutoSync = (onSyncComplete) => {
     }
   }, SYNC_INTERVAL);
 
+  // Background cache cleanup every 30s when online (skip auth/session stores)
+  if (!cacheClearIntervalId) {
+    cacheClearIntervalId = setInterval(() => {
+      if (isOnline()) {
+        clearAllCache().catch((err) => console.warn('[CacheCleanup] Failed to clear cache:', err));
+      }
+    }, 30000);
+  }
+
   const onlineHandler = () => {
     lastDataSync = 0;
     setTimeout(() => {
@@ -999,6 +1050,10 @@ export const startAutoSync = (onSyncComplete) => {
       clearInterval(syncIntervalId);
       syncIntervalId = null;
     }
+    if (cacheClearIntervalId) {
+      clearInterval(cacheClearIntervalId);
+      cacheClearIntervalId = null;
+    }
     window.removeEventListener('online', onlineHandler);
     document.removeEventListener('visibilitychange', visibilityHandler);
   };
@@ -1034,7 +1089,7 @@ export const getSyncStatus = async () => {
 };
 
 // Export for use in components
-export default {
+const offlineSyncService = {
   isOnline,
   syncPendingOperations,
   performFullSync,
@@ -1050,5 +1105,7 @@ export default {
   syncDeliveryOrders,
   syncDineInOrders
 };
+
+export default offlineSyncService;
 
 

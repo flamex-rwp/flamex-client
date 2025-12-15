@@ -16,6 +16,7 @@ const CustomerAddressSelector = ({
   const [showAddForm, setShowAddForm] = useState(false);
   const [newAddress, setNewAddress] = useState('');
   const [newAddressNotes, setNewAddressNotes] = useState('');
+  const [newGoogleMapsLink, setNewGoogleMapsLink] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [adding, setAdding] = useState(false);
 
@@ -154,6 +155,7 @@ const CustomerAddressSelector = ({
           address: newAddress.trim(),
           isDefault,
           notes: newAddressNotes.trim() || undefined,
+          googleMapsLink: newGoogleMapsLink.trim() || undefined,
           customerId: customer.id,
           offline: true,
         };
@@ -162,6 +164,7 @@ const CustomerAddressSelector = ({
         setAddresses(prev => [...prev, newAddr]);
         setNewAddress('');
         setNewAddressNotes('');
+        setNewGoogleMapsLink('');
         setIsDefault(false);
         setShowAddForm(false);
 
@@ -185,6 +188,7 @@ const CustomerAddressSelector = ({
               address: newAddr.address,
               isDefault: newAddr.isDefault,
               notes: newAddr.notes,
+              googleMapsLink: newAddr.googleMapsLink,
             },
             offlineId: customer.id,
           });
@@ -203,20 +207,22 @@ const CustomerAddressSelector = ({
       const response = await customerAPI.createAddress(customer.id, {
         address: newAddress.trim(),
         isDefault: isDefault,
-        notes: newAddressNotes.trim() || undefined
+        notes: newAddressNotes.trim() || undefined,
+        googleMapsLink: newGoogleMapsLink.trim() || undefined
       });
 
       const newAddr = response.data?.data || response.data;
       setAddresses(prev => [...prev, newAddr]);
       setNewAddress('');
       setNewAddressNotes('');
+      setNewGoogleMapsLink('');
       setIsDefault(false);
       setShowAddForm(false);
       showSuccess('Address added successfully');
 
-      // Auto-select the new address
+      // Auto-select the new address - pass full object to include googleMapsLink
       if (onAddressSelect) {
-        onAddressSelect(newAddr.address);
+        onAddressSelect(newAddr); // Pass full address object, not just string
       }
     } catch (err) {
       console.error('Failed to add address:', err);
@@ -227,9 +233,17 @@ const CustomerAddressSelector = ({
     }
   };
 
-  const handleSelectAddress = (address) => {
+  const handleSelectAddress = (addressString) => {
     if (onAddressSelect) {
-      onAddressSelect(address);
+      // Find the full address object to include googleMapsLink and notes
+      const fullAddress = addresses.find(addr => addr.address === addressString);
+      if (fullAddress) {
+        // Pass the full address object
+        onAddressSelect(fullAddress);
+      } else {
+        // Fallback to just the string if address not found
+        onAddressSelect(addressString);
+      }
     }
   };
 
@@ -271,6 +285,42 @@ const CustomerAddressSelector = ({
               </option>
             ))}
           </select>
+
+          {/* Show selected address details */}
+          {selectedAddress && (() => {
+            const selectedAddrObj = addresses.find(addr => addr.address === selectedAddress);
+            if (selectedAddrObj) {
+              return (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8f9fa', borderRadius: '8px', fontSize: '0.85rem' }}>
+                  <div style={{ fontWeight: '500', marginBottom: '0.25rem', color: '#495057' }}>
+                    Selected Address:
+                  </div>
+                  <div style={{ color: '#6c757d', marginBottom: '0.25rem' }}>
+                    {selectedAddrObj.address}
+                  </div>
+                  {selectedAddrObj.notes && (
+                    <div style={{ color: '#6c757d', marginTop: '0.25rem' }}>
+                      <strong>Notes:</strong> {selectedAddrObj.notes}
+                    </div>
+                  )}
+                  {selectedAddrObj.googleMapsLink && (
+                    <div style={{ color: '#6c757d', marginTop: '0.25rem' }}>
+                      <strong>Google Maps:</strong>{' '}
+                      <a 
+                        href={selectedAddrObj.googleMapsLink} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                      >
+                        {selectedAddrObj.googleMapsLink}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           {!disabled && (
             <div style={{ marginTop: '0.75rem' }}>
@@ -337,6 +387,25 @@ const CustomerAddressSelector = ({
                     />
                   </div>
 
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.9rem', fontWeight: '500' }}>
+                      Google Maps Link (optional)
+                    </label>
+                    <input
+                      type="url"
+                      value={newGoogleMapsLink}
+                      onChange={(e) => setNewGoogleMapsLink(e.target.value)}
+                      placeholder="https://maps.google.com/..."
+                      style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        border: '1px solid #ced4da',
+                        borderRadius: '4px',
+                        fontSize: '0.9rem'
+                      }}
+                    />
+                  </div>
+
                   <div style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center' }}>
                     <input
                       type="checkbox"
@@ -375,6 +444,7 @@ const CustomerAddressSelector = ({
                         setShowAddForm(false);
                         setNewAddress('');
                         setNewAddressNotes('');
+                        setNewGoogleMapsLink('');
                         setIsDefault(false);
                       }}
                       style={{

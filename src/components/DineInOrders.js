@@ -92,7 +92,14 @@ const DineInOrders = () => {
         params.end = endDate;
       }
 
-      const response = await ordersAPI.getDineInStats(params);
+      if (!online) {
+        setStats({ ...defaultStats });
+        return;
+      }
+
+      const response = await ordersAPI.getDineInStats(
+        { params, useCache: false, disableCacheFallback: true }
+      );
       const payload = response.data?.data || response.data || {};
       setStats(mergeStats({
         pending_payments: {
@@ -114,6 +121,11 @@ const DineInOrders = () => {
     }
   }, [dateFilter, startDate, endDate, mergeStats, defaultStats]);
 
+  const isOfflineEffective = useCallback(() => {
+    const browserOffline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+    return !online || browserOffline;
+  }, [online]);
+
   const fetchOrders = useCallback(async (tab = null) => {
     // If tab is not specified, use activeTab. Otherwise fetch for the specified tab
     const targetTab = tab || activeTab;
@@ -130,19 +142,23 @@ const DineInOrders = () => {
         params.end = endDate;
       }
 
-      // Fetch API orders
+      // Fetch API orders when online only (avoid stale cache offline)
       let apiOrders = [];
-      try {
-        const response = await ordersAPI.getDineInOrders(params);
-        apiOrders = response.data.data || [];
-      } catch (err) {
-        console.warn('Failed to load dine-in orders from API, using offline only:', err);
+      if (online) {
+        try {
+          const response = await ordersAPI.getDineInOrders({ ...params, useCache: false, disableCacheFallback: true });
+          apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+        } catch (err) {
+          console.warn('Failed to load dine-in orders from API, using offline only:', err);
+        }
+      } else {
+        console.log('[DineInOrders] Offline - skipping API fetch to avoid stale data');
       }
 
-      // Fetch offline orders
-      const offlineOrdersData = await getOfflineOrders();
-      const offlineOrders = offlineOrdersData
-        .filter(offlineOrder => !offlineOrder.synced)
+      // Fetch offline orders only when offline; skip when online to avoid stale data display
+      const offlineOrders = online ? [] : (
+        await getOfflineOrders()
+      ).filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
           // Only include dine-in orders (not delivery)
@@ -207,7 +223,7 @@ const DineInOrders = () => {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, dateFilter, startDate, endDate]);
+  }, [activeTab, dateFilter, startDate, endDate, online]);
 
   // Fetch both pending and completed orders (for counts)
   const fetchAllOrders = useCallback(async (showLoading = true) => {
@@ -232,43 +248,47 @@ const DineInOrders = () => {
         params.end = endDate;
       }
 
-      // Fetch API orders in parallel
+      // Fetch API orders in parallel (only when online to avoid stale cached data offline)
       let pendingApiOrders = [];
       let completedApiOrders = [];
-      try {
-        const [pendingResponse, completedResponse] = await Promise.all([
-          ordersAPI.getDineInOrders({ ...params, status: 'pending' }),
-          ordersAPI.getDineInOrders({ ...params, status: 'completed' })
-        ]);
-        pendingApiOrders = pendingResponse.data.data || [];
-        completedApiOrders = completedResponse.data.data || [];
-        
-        // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
-        const normalizeOrderStatus = (order) => {
-          const normalized = { ...order };
-          const paymentStatus = normalized.paymentStatus || normalized.payment_status || 'pending';
-          const orderStatus = normalized.orderStatus || normalized.order_status || 'pending';
+      if (online) {
+        try {
+          const [pendingResponse, completedResponse] = await Promise.all([
+            ordersAPI.getDineInOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true }),
+            ordersAPI.getDineInOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true })
+          ]);
+          pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
           
-          // If payment is completed, ensure orderStatus is also completed
-          if (paymentStatus === 'completed' && orderStatus !== 'completed' && orderStatus !== 'cancelled') {
-            normalized.orderStatus = 'completed';
-            normalized.order_status = 'completed';
-            console.log(`[DineInOrders] Normalized API order ${normalized.id || normalized.orderNumber}: paymentStatus=completed but orderStatus was ${orderStatus}, setting to completed`);
-          }
+          // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
+          const normalizeOrderStatus = (order) => {
+            const normalized = { ...order };
+            const paymentStatus = normalized.paymentStatus || normalized.payment_status || 'pending';
+            const orderStatus = normalized.orderStatus || normalized.order_status || 'pending';
+            
+            // If payment is completed, ensure orderStatus is also completed
+            if (paymentStatus === 'completed' && orderStatus !== 'completed' && orderStatus !== 'cancelled') {
+              normalized.orderStatus = 'completed';
+              normalized.order_status = 'completed';
+              console.log(`[DineInOrders] Normalized API order ${normalized.id || normalized.orderNumber}: paymentStatus=completed but orderStatus was ${orderStatus}, setting to completed`);
+            }
+            
+            return normalized;
+          };
           
-          return normalized;
-        };
-        
-        pendingApiOrders = pendingApiOrders.map(normalizeOrderStatus);
-        completedApiOrders = completedApiOrders.map(normalizeOrderStatus);
-      } catch (err) {
-        console.warn('Failed to load orders from API, using offline only:', err);
+          pendingApiOrders = pendingApiOrders.map(normalizeOrderStatus);
+          completedApiOrders = completedApiOrders.map(normalizeOrderStatus);
+        } catch (err) {
+          console.warn('Failed to load orders from API, using offline only:', err);
+        }
+      } else {
+        console.log('[DineInOrders] Offline - skipping API fetch to avoid stale data');
       }
 
-      // Fetch offline orders
-      const offlineOrdersData = await getOfflineOrders();
-      const offlineOrders = offlineOrdersData
-        .filter(offlineOrder => !offlineOrder.synced)
+      // Fetch offline orders only when offline; skip when online to avoid showing stale local orders
+      const offlineOrders = online ? [] : (
+        await getOfflineOrders()
+      ).filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
           // Only include dine-in orders
@@ -365,7 +385,7 @@ const DineInOrders = () => {
         setLoading(false);
       }
     }
-  }, [dateFilter, startDate, endDate]);
+  }, [dateFilter, startDate, endDate, online]);
 
   // Initial load - only once (handles React StrictMode double mount)
   useEffect(() => {
@@ -485,6 +505,9 @@ const DineInOrders = () => {
               ]);
               isLoadingRef.current = false;
             }
+            // After a successful sync, drop any remaining offline placeholders from view
+            setPendingOrders(prev => prev.filter(o => !o.offline));
+            setCompletedOrders(prev => prev.filter(o => !o.offline));
           } else if (syncResult && syncResult.failed > 0) {
             console.warn('[DineInOrders] Some operations failed to sync:', syncResult.errors);
             // Still refresh to show current state, but log the errors
@@ -608,6 +631,13 @@ const DineInOrders = () => {
         payload.returnAmount = getReturnAmount();
       }
 
+      // Block marking paid offline for online-created orders
+      if (isOfflineEffective() && !order.offline) {
+        showError('This order was created online. Reconnect to mark it as paid.');
+        setMarkingPaidId(null);
+        return;
+      }
+
       const isOffline = order.offline;
       let updatedOrder = null;
       let orderItems = [];
@@ -698,21 +728,24 @@ const DineInOrders = () => {
               orderStatus: newOrderStatus
             };
             
-            // Extract the real offline ID (IndexedDB ID) for updating
-            const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-') 
-              ? order.id.replace(/^OFFLINE-/, '').split('-')[0] 
-              : order.id);
+            // Extract the real ID to use for pending sync (server ID if online-created, offline ID otherwise)
+            const orderIdStr = typeof order.id === 'string' ? order.id : String(order.id || '');
+            const realOfflineId = order.offlineId || (orderIdStr.startsWith('OFFLINE-') 
+              ? orderIdStr.replace(/^OFFLINE-/, '').split('-')[0] 
+              : orderIdStr);
             
             // Try to update offline order if it exists, otherwise create a pending operation
             try {
-              // Update the order in IndexedDB with completed status
+              // Update the order in IndexedDB with completed status (if it exists there)
               updatedOrder = await updateOfflineOrder(realOfflineId, {
                 ...updatedData,
                 offlineStatusUpdated: true
               });
               console.log('[DineInOrders] Updated offline order in IndexedDB:', realOfflineId, updatedData);
             } catch (updateError) {
+              // For online-created orders (no offline copy), just log
               console.warn('Could not update offline order, will queue for sync:', updateError);
+              updatedOrder = { ...order, ...updatedData };
             }
             
             // Queue operations for sync - use the real offline ID
@@ -813,6 +846,9 @@ const DineInOrders = () => {
         const exists = prev.find(o => o.id === order.id);
         return exists ? prev.map(o => o.id === order.id ? updatedLocal : o) : [...prev, updatedLocal];
       });
+
+      // Free the table once paid/completed
+      emitTableFreed(order);
       
       // Show appropriate success message based on online/offline status
       const isOfflineOrder = order.offline;
@@ -855,6 +891,12 @@ const DineInOrders = () => {
     return `${mins}m`;
   };
 
+  const emitTableFreed = useCallback((orderObj) => {
+    const tableNum = orderObj?.tableNumber || orderObj?.table_number;
+    if (!tableNum) return;
+    window.dispatchEvent(new CustomEvent('tableFreed', { detail: { tableNumber: tableNum } }));
+  }, []);
+
   // Get duration color based on time
   const getDurationColor = (createdAt) => {
     const minutes = dayjs().diff(dayjs(createdAt), 'minute');
@@ -882,10 +924,11 @@ const DineInOrders = () => {
       
       // If offline, save to pending operations queue
       if (!isOnline()) {
-        // Extract real order ID (remove OFFLINE- prefix if present)
-        const realOrderId = orderId.startsWith('OFFLINE-') 
-          ? targetOrder?.offlineId || orderId.replace(/^OFFLINE-.*?-/, '')
-          : orderId;
+        // Extract real order ID (remove OFFLINE- prefix if present) - ensure string
+        const orderIdStr = typeof orderId === 'string' ? orderId : String(orderId);
+        const realOrderId = orderIdStr.startsWith('OFFLINE-') 
+          ? targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, '')
+          : orderIdStr;
         
         // Save to pending operations for sync when online
         await addPendingOperation({
@@ -926,6 +969,10 @@ const DineInOrders = () => {
           showSuccess(`Order status updated to ${newStatus}`);
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
+          // Free table if the order is now completed or cancelled
+          if (newStatus === 'completed' || newStatus === 'cancelled') {
+            emitTableFreed(targetOrder);
+          }
           
           // Dispatch event to refresh badges immediately
           window.dispatchEvent(new CustomEvent('orderUpdated', { 
@@ -998,6 +1045,9 @@ const DineInOrders = () => {
             await ordersAPI.cancelOrder(orderId);
             showSuccess('Order cancelled successfully');
           }
+          
+          // Free the table when order is cancelled
+          emitTableFreed(targetOrder);
           
           // Dispatch event to refresh badges immediately
           window.dispatchEvent(new CustomEvent('orderUpdated', {
@@ -1629,9 +1679,18 @@ const DineInOrders = () => {
                     </button>
                   </div>
 
+                  {(() => {
+                    const isServerOrder = order.offline !== true;
+                    const offlineEffective = isOfflineEffective();
+                    const disableMarkPaid = offlineEffective && isServerOrder;
+                    const buttonTitle = disableMarkPaid
+                      ? 'This order was created online. Reconnect to mark as paid.'
+                      : undefined;
+                    return (
                   <button
                     onClick={() => openPaymentModal(order)}
-                    disabled={markingPaidId === order.id}
+                    disabled={markingPaidId === order.id || disableMarkPaid}
+                    title={buttonTitle}
                     style={{
                       width: '100%',
                       padding: '0.75rem',
@@ -1640,13 +1699,17 @@ const DineInOrders = () => {
                       background: 'var(--gradient-primary)',
                       color: 'white',
                       fontWeight: 'bold',
-                      cursor: markingPaidId === order.id ? 'not-allowed' : 'pointer',
+                      cursor: (markingPaidId === order.id || disableMarkPaid) ? 'not-allowed' : 'pointer',
                       fontSize: '1rem',
-                      opacity: markingPaidId === order.id ? 0.6 : 1
+                      opacity: (markingPaidId === order.id || disableMarkPaid) ? 0.6 : 1
                     }}
                   >
-                    {markingPaidId === order.id ? 'Processing...' : '💰 Mark as Paid'}
+                    {markingPaidId === order.id
+                      ? 'Processing...'
+                      : (disableMarkPaid ? '💰 Mark as Paid (online only)' : '💰 Mark as Paid')}
                   </button>
+                    );
+                  })()}
                 </div>
               )}
 

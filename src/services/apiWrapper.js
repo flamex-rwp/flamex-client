@@ -12,10 +12,11 @@ const createCachedRequest = (originalRequest) => {
 
     const method = (config.method || 'GET').toUpperCase();
     const url = config.url || '';
-    const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+    const online = isOnline();
 
-    // For GET requests, check cache first
-    if (method === 'GET') {
+    // For GET requests, check cache first only when offline or explicitly allowed
+    const allowCacheLookup = (!online || config?.useCache === true) && config?.disableCacheFallback !== true;
+    if (method === 'GET' && allowCacheLookup) {
       try {
         const cachedResponse = await getCachedAPIResponse(url, method);
         if (cachedResponse) {

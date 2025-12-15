@@ -7,7 +7,9 @@ import AdminPortal from './components/AdminPortal';
 import ManagerPortal from './components/ManagerPortal';
 import { ToastProvider } from './contexts/ToastContext';
 import { OfflineProvider } from './contexts/OfflineContext';
+import { ServerConnectionProvider } from './contexts/ServerConnectionContext';
 import { Spinner } from './components/LoadingSkeleton';
+import ServerConnectionManager from './components/ServerConnectionManager';
 import './utils/debugOffline'; // Enable debug functions
 
 function App() {
@@ -95,27 +97,33 @@ function App() {
   if (!user) {
     return (
       <ToastProvider>
-        <Login onLoginSuccess={handleLoginSuccess} />
+        <ServerConnectionProvider>
+          <ServerConnectionManager />
+          <Login onLoginSuccess={handleLoginSuccess} />
+        </ServerConnectionProvider>
       </ToastProvider>
     );
   }
 
   return (
     <ToastProvider>
-      <OfflineProvider>
-        <Router>
-          <Routes>
-            {user.role === 'admin' ? (
-              <Route path="/*" element={<AdminPortal user={user} onLogout={handleLogout} />} />
-            ) : (
-              <>
-                <Route path="/manager/*" element={<ManagerPortal user={user} onLogout={handleLogout} />} />
-                <Route path="/*" element={<Navigate to="/manager/orders" replace />} />
-              </>
-            )}
-          </Routes>
-        </Router>
-      </OfflineProvider>
+      <ServerConnectionProvider>
+        <OfflineProvider>
+          <ServerConnectionManager />
+          <Router>
+            <Routes>
+              {user.role === 'admin' ? (
+                <Route path="/*" element={<AdminPortal user={user} onLogout={handleLogout} />} />
+              ) : (
+                <>
+                  <Route path="/manager/*" element={<ManagerPortal user={user} onLogout={handleLogout} />} />
+                  <Route path="/*" element={<Navigate to="/manager/orders" replace />} />
+                </>
+              )}
+            </Routes>
+          </Router>
+        </OfflineProvider>
+      </ServerConnectionProvider>
     </ToastProvider>
   );
 }

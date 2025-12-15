@@ -413,7 +413,8 @@ const OrderHistory = () => {
         customer_name: customerName,
         customer_phone: customerPhone,
         customer_address: deliveryAddress,
-        delivery_notes: deliveryNotes
+        delivery_notes: deliveryNotes,
+        customer: customer || null // Include customer object for notes fallback
       };
 
       // Validate receipt data
@@ -1269,16 +1270,170 @@ const OrderHistory = () => {
                                   👤 {customerName}
                                 </p>
                               )}
-                              {customerPhone && (
-                                <p style={{ margin: '0.25rem 0', fontSize: '0.85rem', color: '#6c757d' }}>
-                                  📞 {customerPhone}
-                                </p>
-                              )}
-                              {deliveryAddress && (
-                                <p style={{ margin: '0.25rem 0', fontSize: '0.85rem', color: '#6c757d' }}>
-                                  📍 {deliveryAddress}
-                                </p>
-                              )}
+                              {(() => {
+                                const deliveryAddress = order.deliveryAddress || order.delivery_address;
+                                // Try to get notes and Google Maps link from order first, then fallback to customer's address
+                                let notes = order.deliveryNotes || order.delivery_notes || order.notes || '';
+                                let googleLink = order.googleMapsLink || order.google_maps_link || '';
+                                
+                                // If order doesn't have notes/googleLink, try to get from customer's address
+                                if ((!notes || !googleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
+                                  const matchingAddress = order.customer.addresses.find(addr => 
+                                    addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
+                                  );
+                                  if (matchingAddress) {
+                                    if (!notes && matchingAddress.notes) notes = matchingAddress.notes;
+                                    if (!googleLink && matchingAddress.googleMapsLink) googleLink = matchingAddress.googleMapsLink;
+                                  }
+                                }
+                                
+                                const copyContainerId = `copy-container-${order.id || order.order_number || Math.random()}`;
+                                
+                                const handleCopy = async () => {
+                                  // Get fresh values from order object to ensure we have the latest data
+                                  let currentNotes = order.deliveryNotes || order.delivery_notes || order.notes || '';
+                                  let currentGoogleLink = order.googleMapsLink || order.google_maps_link || '';
+                                  
+                                  // Fallback to customer's address if order doesn't have it
+                                  if ((!currentNotes || !currentGoogleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
+                                    const matchingAddress = order.customer.addresses.find(addr => 
+                                      addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
+                                    );
+                                    if (matchingAddress) {
+                                      if (!currentNotes && matchingAddress.notes) currentNotes = matchingAddress.notes;
+                                      if (!currentGoogleLink && matchingAddress.googleMapsLink) currentGoogleLink = matchingAddress.googleMapsLink;
+                                    }
+                                  }
+                                  
+                                  let copyText = '';
+                                  if (customerPhone) copyText += `Phone: ${customerPhone}`;
+                                  if (deliveryAddress) {
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Address: ${deliveryAddress}`;
+                                  }
+                                  if (currentNotes && currentNotes.trim()) {
+                                    if (copyText) copyText += '\n\n';
+                                    copyText += `Notes: ${currentNotes}`;
+                                  }
+                                  if (currentGoogleLink && currentGoogleLink.trim()) {
+                                    if (copyText) copyText += '\n\n';
+                                    copyText += `Google Maps: ${currentGoogleLink}`;
+                                  }
+                                  
+                                  try {
+                                    await navigator.clipboard.writeText(copyText);
+                                    showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                  } catch (err) {
+                                    // Fallback for older browsers
+                                    const textArea = document.createElement('textarea');
+                                    textArea.value = copyText;
+                                    document.body.appendChild(textArea);
+                                    textArea.select();
+                                    document.execCommand('copy');
+                                    document.body.removeChild(textArea);
+                                    showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                  }
+                                };
+                                
+                                return (
+                                  <div 
+                                    id={copyContainerId}
+                                    style={{ position: 'relative' }}
+                                    onMouseEnter={(e) => {
+                                      const container = e.currentTarget;
+                                      const phoneEl = container.querySelector('.copy-highlight-phone');
+                                      const addressEl = container.querySelector('.copy-highlight-address');
+                                      if (phoneEl) {
+                                        phoneEl.style.backgroundColor = '#fff3cd';
+                                      }
+                                      if (addressEl) {
+                                        addressEl.style.backgroundColor = '#fff3cd';
+                                      }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      const container = e.currentTarget;
+                                      const phoneEl = container.querySelector('.copy-highlight-phone');
+                                      const addressEl = container.querySelector('.copy-highlight-address');
+                                      if (phoneEl) {
+                                        phoneEl.style.backgroundColor = 'transparent';
+                                      }
+                                      if (addressEl) {
+                                        addressEl.style.backgroundColor = 'transparent';
+                                      }
+                                    }}
+                                  >
+                                    {customerPhone && (
+                                      <p 
+                                        className="copy-highlight-phone"
+                                        style={{ 
+                                          margin: '0.25rem 0', 
+                                          fontSize: '0.85rem', 
+                                          color: '#6c757d',
+                                          padding: '0.25rem',
+                                          borderRadius: '4px',
+                                          transition: 'background-color 0.2s ease'
+                                        }}
+                                      >
+                                        📞 {customerPhone}
+                                      </p>
+                                    )}
+                                    {deliveryAddress && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.25rem 0' }}>
+                                        <p 
+                                          className="copy-highlight-address"
+                                          style={{ 
+                                            margin: 0, 
+                                            fontSize: '0.85rem', 
+                                            color: '#6c757d', 
+                                            flex: 1,
+                                            padding: '0.25rem',
+                                            borderRadius: '4px',
+                                            transition: 'background-color 0.2s ease'
+                                          }}
+                                        >
+                                          📍 {deliveryAddress}
+                                        </p>
+                                        <button
+                                          onClick={handleCopy}
+                                          style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: '0.25rem',
+                                            fontSize: '1rem',
+                                            color: '#495057',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            transition: 'transform 0.2s ease'
+                                          }}
+                                          title="Copy phone number, address, notes, and Google Maps link"
+                                        >
+                                          📋
+                                        </button>
+                                      </div>
+                                    )}
+                                    {notes && (
+                                      <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
+                                        <strong>Notes:</strong> {notes}
+                                      </div>
+                                    )}
+                                    {googleLink && (
+                                      <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
+                                        <strong>Google Maps:</strong>{' '}
+                                        <a 
+                                          href={googleLink} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                                        >
+                                          {googleLink}
+                                        </a>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </>
                           );
                         })()}
@@ -1457,18 +1612,154 @@ const OrderHistory = () => {
                       const customerName = customer?.name || orderDetails.order.customer_name || orderDetails.order.customerName;
                       const customerPhone = customer?.phone || orderDetails.order.customer_phone || orderDetails.order.customerPhone;
                       const deliveryAddress = orderDetails.order.deliveryAddress || orderDetails.order.delivery_address;
-                      const deliveryNotes = orderDetails.order.deliveryNotes || orderDetails.order.delivery_notes;
+                      let deliveryNotes = orderDetails.order.deliveryNotes || orderDetails.order.delivery_notes;
                       const deliveryCharge = orderDetails.order.deliveryCharge || orderDetails.order.delivery_charge || 0;
                       const deliveryStatus = orderDetails.order.deliveryStatus || orderDetails.order.delivery_status;
+                      let googleMapsLink = orderDetails.order.googleMapsLink || orderDetails.order.google_maps_link;
+                      
+                      // If order doesn't have notes/googleLink, try to get from customer's address
+                      if ((!deliveryNotes || !googleMapsLink) && orderDetails.order.customer?.addresses && Array.isArray(orderDetails.order.customer.addresses)) {
+                        const matchingAddress = orderDetails.order.customer.addresses.find(addr => 
+                          addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
+                        );
+                        if (matchingAddress) {
+                          if (!deliveryNotes && matchingAddress.notes) deliveryNotes = matchingAddress.notes;
+                          if (!googleMapsLink && matchingAddress.googleMapsLink) googleMapsLink = matchingAddress.googleMapsLink;
+                        }
+                      }
                       
                       return (
                         <div style={{ marginBottom: '1rem' }}>
                           <strong>Customer & Delivery Information:</strong>
                           <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#495057' }}>
                             {customerName && <div>Customer: {customerName}</div>}
-                            {customerPhone && <div>Phone: {customerPhone}</div>}
-                            {deliveryAddress && <div>Address: {deliveryAddress}</div>}
-                            {deliveryNotes && <div>Notes: {deliveryNotes}</div>}
+                            {(() => {
+                              // Use the already computed googleMapsLink (which includes fallback from customer address)
+                              const googleLink = googleMapsLink || '';
+                              const copyContainerId = `copy-container-details-${orderDetails.order.id || orderDetails.order.order_number || Math.random()}`;
+                              
+                              const handleCopy = async () => {
+                                // Use the already computed deliveryNotes and googleMapsLink (which includes fallback from customer address)
+                                let copyText = '';
+                                if (customerPhone) copyText += `Phone: ${customerPhone}`;
+                                if (deliveryAddress) {
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Address: ${deliveryAddress}`;
+                                }
+                                if (deliveryNotes && deliveryNotes.trim()) {
+                                  if (copyText) copyText += '\n\n';
+                                  copyText += `Notes: ${deliveryNotes}`;
+                                }
+                                if (googleMapsLink && googleMapsLink.trim()) {
+                                  if (copyText) copyText += '\n\n';
+                                  copyText += `Google Maps: ${googleMapsLink}`;
+                                }
+                                
+                                try {
+                                  await navigator.clipboard.writeText(copyText);
+                                  showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                } catch (err) {
+                                  // Fallback for older browsers
+                                  const textArea = document.createElement('textarea');
+                                  textArea.value = copyText;
+                                  document.body.appendChild(textArea);
+                                  textArea.select();
+                                  document.execCommand('copy');
+                                  document.body.removeChild(textArea);
+                                  showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                }
+                              };
+                              
+                              return (
+                                <div 
+                                  id={copyContainerId}
+                                  style={{ position: 'relative' }}
+                                  onMouseEnter={(e) => {
+                                    const container = e.currentTarget;
+                                    const phoneEl = container.querySelector('.copy-highlight-phone');
+                                    const addressEl = container.querySelector('.copy-highlight-address');
+                                    if (phoneEl) {
+                                      phoneEl.style.backgroundColor = '#fff3cd';
+                                    }
+                                    if (addressEl) {
+                                      addressEl.style.backgroundColor = '#fff3cd';
+                                    }
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    const container = e.currentTarget;
+                                    const phoneEl = container.querySelector('.copy-highlight-phone');
+                                    const addressEl = container.querySelector('.copy-highlight-address');
+                                    if (phoneEl) {
+                                      phoneEl.style.backgroundColor = 'transparent';
+                                    }
+                                    if (addressEl) {
+                                      addressEl.style.backgroundColor = 'transparent';
+                                    }
+                                  }}
+                                >
+                                  {customerPhone && (
+                                    <div
+                                      className="copy-highlight-phone"
+                                      style={{
+                                        padding: '0.25rem',
+                                        borderRadius: '4px',
+                                        transition: 'background-color 0.2s ease'
+                                      }}
+                                    >
+                                      Phone: {customerPhone}
+                                    </div>
+                                  )}
+                                  {deliveryAddress && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <div
+                                        className="copy-highlight-address"
+                                        style={{
+                                          padding: '0.25rem',
+                                          borderRadius: '4px',
+                                          transition: 'background-color 0.2s ease',
+                                          flex: 1
+                                        }}
+                                      >
+                                        Address: {deliveryAddress}
+                                      </div>
+                                      <button
+                                        onClick={handleCopy}
+                                        style={{
+                                          background: 'transparent',
+                                          border: 'none',
+                                          cursor: 'pointer',
+                                          padding: '0.25rem',
+                                          fontSize: '1rem',
+                                          color: '#495057',
+                                          transition: 'transform 0.2s ease'
+                                        }}
+                                        title="Copy phone number, address, notes, and Google Maps link"
+                                      >
+                                        📋
+                                      </button>
+                                    </div>
+                                  )}
+                                  {deliveryNotes && (
+                                    <div style={{ marginTop: '0.5rem' }}>
+                                      <strong>Notes:</strong> {deliveryNotes}
+                                    </div>
+                                  )}
+                                  {googleMapsLink && (
+                                    <div style={{ marginTop: '0.5rem' }}>
+                                      <strong>Google Maps:</strong>{' '}
+                                      <a 
+                                        href={googleMapsLink} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
+                                      >
+                                        {googleMapsLink}
+                                      </a>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             {deliveryCharge > 0 && (
                               <div>Delivery Charge: {formatCurrency(deliveryCharge)}</div>
                             )}

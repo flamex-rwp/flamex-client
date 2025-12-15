@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { startAutoSync, stopAutoSync, getSyncStatus, forceSyncNow } from '../services/offlineSyncService';
 import { isOnline } from '../services/offlineSyncService';
+import { clearApiCache } from '../services/cacheService';
 import {
   subscribeToOrderUpdates,
   subscribeToSyncCompleted,
@@ -31,6 +32,13 @@ export const OfflineProvider = ({ children }) => {
     const handleOnline = () => {
       setOnline(true);
       console.log('[OfflineContext] Device came online');
+      // Clear browser Cache Storage when coming online to avoid stale assets/data (auth storage untouched)
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        caches.keys()
+          .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+          .then(() => console.log('[OfflineContext] Cleared browser Cache Storage on online'))
+          .catch((err) => console.warn('[OfflineContext] Failed to clear browser Cache Storage:', err));
+      }
     };
 
     const handleOffline = () => {
@@ -46,6 +54,21 @@ export const OfflineProvider = ({ children }) => {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Background cache clearing every 30s while online (skip sessions/tokens)
+  useEffect(() => {
+    if (!online) return undefined;
+    const interval = setInterval(() => {
+      clearApiCache().catch((err) => console.warn('[OfflineContext] Failed to clear API cache:', err));
+      // Also clear browser Cache Storage periodically while online (auth not affected)
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        caches.keys()
+          .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+          .catch((err) => console.warn('[OfflineContext] Failed to clear browser Cache Storage (interval):', err));
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [online]);
 
   // Handle sync completion callback
   const handleSyncComplete = useCallback(async (result) => {
