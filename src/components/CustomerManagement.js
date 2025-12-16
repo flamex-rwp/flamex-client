@@ -133,7 +133,7 @@ const CustomerManagement = () => {
       if (editingCustomer) {
         // Check if address is new (not in existing addresses)
         const isNewAddress = !customerAddresses.some(addr => addr.address === customerForm.address);
-        
+
         // Update customer
         await customerAPI.update(editingCustomer.id, {
           name: customerForm.name,
@@ -141,7 +141,7 @@ const CustomerManagement = () => {
           backupPhone: customerForm.backupPhone,
           notes: customerForm.notes
         });
-        
+
         // If it's a new address, add it
         if (isNewAddress && customerForm.address.trim()) {
           try {
@@ -155,7 +155,7 @@ const CustomerManagement = () => {
             // Continue even if address creation fails
           }
         }
-        
+
         showSuccess('Customer updated successfully');
       } else {
         await customerAPI.create(customerForm);
@@ -204,15 +204,15 @@ const CustomerManagement = () => {
 
   const handleEditCustomer = async (customer) => {
     setEditingCustomer(customer);
-    
+
     // Load addresses for this customer
     const addresses = await loadCustomerAddresses(customer.id);
     setCustomerAddresses(addresses);
-    
+
     // Get default address or first address
     const defaultAddress = addresses.find(addr => addr.isDefault) || addresses[0];
     const displayAddress = defaultAddress?.address || customer.address || '';
-    
+
     setCustomerForm({
       name: customer.name || '',
       phone: customer.phone || '',
@@ -348,9 +348,9 @@ const CustomerManagement = () => {
                   <td>{customer.backupPhone || customer.backup_phone || '-'}</td>
                   <td style={{ maxWidth: '200px' }}>
                     {(() => {
-                      const defaultAddr = customer.addresses?.find(addr => addr.isDefault) || 
-                                         customer.addresses?.[0] || 
-                                         (customer.address ? { address: customer.address, isDefault: true } : null);
+                      const defaultAddr = customer.addresses?.find(addr => addr.isDefault) ||
+                        customer.addresses?.[0] ||
+                        (customer.address ? { address: customer.address, isDefault: true } : null);
                       if (!defaultAddr) return '-';
                       return (
                         <div
@@ -440,8 +440,20 @@ const CustomerManagement = () => {
                 </label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={customerForm.phone}
-                  onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^[0-9]+$/.test(val)) {
+                      setCustomerForm({ ...customerForm, phone: val });
+                    }
+                  }}
+                  onKeyPress={(e) => {
+                    if (!/[0-9]/.test(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
                   required
                   style={{
                     width: '100%',
@@ -458,8 +470,20 @@ const CustomerManagement = () => {
                 </label>
                 <input
                   type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={customerForm.backupPhone}
-                  onChange={(e) => setCustomerForm({ ...customerForm, backupPhone: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^[0-9]+$/.test(val)) {
+                      setCustomerForm({ ...customerForm, backupPhone: val });
+                    }
+                  }}
+                  onKeyPress={(e) => {
+                    if (!/[0-9]/.test(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -474,7 +498,7 @@ const CustomerManagement = () => {
                   Address *
                   {editingCustomer && (
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.85rem', fontWeight: 'normal', color: '#6c757d' }}>
-                      (or <span 
+                      (or <span
                         onClick={() => handleOpenAddressModal(editingCustomer)}
                         style={{ color: '#339af0', cursor: 'pointer', textDecoration: 'underline' }}
                       >manage addresses</span>)
@@ -489,7 +513,7 @@ const CustomerManagement = () => {
                       const query = e.target.value;
                       setAddressSearchQuery(query);
                       setShowAddressDropdown(true);
-                      
+
                       // Update form address as user types
                       setCustomerForm({ ...customerForm, address: query });
                     }}
@@ -505,7 +529,7 @@ const CustomerManagement = () => {
                         setShowAddressDropdown(false);
                         // If search query doesn't match any address, keep it as new address
                         if (addressSearchQuery && editingCustomer) {
-                          const matches = customerAddresses.some(addr => 
+                          const matches = customerAddresses.some(addr =>
                             addr.address.toLowerCase() === addressSearchQuery.trim().toLowerCase()
                           );
                           if (!matches) {
@@ -531,7 +555,7 @@ const CustomerManagement = () => {
                       fontFamily: 'inherit'
                     }}
                   />
-                  
+
                   {/* Address Dropdown */}
                   {editingCustomer && showAddressDropdown && customerAddresses.length > 0 && (
                     <div
@@ -556,7 +580,7 @@ const CustomerManagement = () => {
                         const filtered = query
                           ? customerAddresses.filter(addr => addr.address.toLowerCase().includes(query))
                           : customerAddresses;
-                        
+
                         return filtered.map((addr) => (
                           <div
                             key={addr.id}
@@ -588,9 +612,9 @@ const CustomerManagement = () => {
                             {addr.googleMapsLink && (
                               <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
                                 <strong>Google Maps:</strong>{' '}
-                                <a 
-                                  href={addr.googleMapsLink} 
-                                  target="_blank" 
+                                <a
+                                  href={addr.googleMapsLink}
+                                  target="_blank"
                                   rel="noopener noreferrer"
                                   style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                                 >
@@ -601,38 +625,38 @@ const CustomerManagement = () => {
                           </div>
                         ));
                       })()}
-                      
+
                       {/* Show "New Address" option if query doesn't match */}
-                      {addressSearchQuery.trim() && 
-                       !customerAddresses.some(addr => 
-                         addr.address.toLowerCase() === addressSearchQuery.trim().toLowerCase()
-                       ) && (
-                        <div
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setCustomerForm({ ...customerForm, address: addressSearchQuery });
-                            setAddressSearchQuery('');
-                            setShowAddressDropdown(false);
-                          }}
-                          style={{
-                            padding: '0.75rem',
-                            cursor: 'pointer',
-                            borderTop: '2px dashed #dee2e6',
-                            background: '#f8f9fa',
-                            color: '#28a745',
-                            fontWeight: '500'
-                          }}
-                          onMouseEnter={(e) => e.target.style.background = '#e6ffed'}
-                          onMouseLeave={(e) => e.target.style.background = '#f8f9fa'}
-                        >
-                          + Add as new address: "{addressSearchQuery}"
-                        </div>
-                      )}
+                      {addressSearchQuery.trim() &&
+                        !customerAddresses.some(addr =>
+                          addr.address.toLowerCase() === addressSearchQuery.trim().toLowerCase()
+                        ) && (
+                          <div
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setCustomerForm({ ...customerForm, address: addressSearchQuery });
+                              setAddressSearchQuery('');
+                              setShowAddressDropdown(false);
+                            }}
+                            style={{
+                              padding: '0.75rem',
+                              cursor: 'pointer',
+                              borderTop: '2px dashed #dee2e6',
+                              background: '#f8f9fa',
+                              color: '#28a745',
+                              fontWeight: '500'
+                            }}
+                            onMouseEnter={(e) => e.target.style.background = '#e6ffed'}
+                            onMouseLeave={(e) => e.target.style.background = '#f8f9fa'}
+                          >
+                            + Add as new address: "{addressSearchQuery}"
+                          </div>
+                        )}
                     </div>
                   )}
                 </div>
-                
+
                 {/* Show selected address details */}
                 {editingCustomer && customerForm.address && (
                   <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
@@ -650,9 +674,9 @@ const CustomerManagement = () => {
                             {selectedAddr.googleMapsLink && (
                               <div style={{ marginTop: '0.25rem' }}>
                                 <strong>Google Maps:</strong>{' '}
-                                <a 
-                                  href={selectedAddr.googleMapsLink} 
-                                  target="_blank" 
+                                <a
+                                  href={selectedAddr.googleMapsLink}
+                                  target="_blank"
                                   rel="noopener noreferrer"
                                   style={{ color: '#339af0', textDecoration: 'underline' }}
                                 >

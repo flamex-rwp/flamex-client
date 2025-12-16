@@ -1742,7 +1742,7 @@ const OrderSystem = () => {
                     display: 'flex',
                     flexDirection: 'column',
                     height: '100%',
-                    minHeight:'300px',
+                    minHeight: '300px',
                     position: 'relative',
                     overflow: 'hidden'
                   }}
@@ -2442,9 +2442,22 @@ const OrderSystem = () => {
                     <label style={{ fontWeight: 600 }}>
                       Phone*
                       <input
-                        type="tel"
+                        onWheel={(e) => e.target.blur()}
+                        type="number"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         value={deliveryPhone}
-                        onChange={(e) => handlePhoneChange(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^[0-9]+$/.test(val)) {
+                            handlePhoneChange(val);
+                          }
+                        }}
+                        onKeyPress={(e) => {
+                          if (!/[0-9]/.test(e.key)) {
+                            e.preventDefault();
+                          }
+                        }}
                         onFocus={() => {
                           if (deliveryPhone.trim().length >= 1) {
                             setShowPhoneSuggestions(true);
@@ -2555,9 +2568,22 @@ const OrderSystem = () => {
                   <label style={{ fontWeight: 600 }}>
                     Backup Phone
                     <input
-                      type="tel"
+                      onWheel={(e) => e.target.blur()}
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={deliveryBackupPhone}
-                      onChange={(e) => handleDeliveryFieldChange('deliveryBackupPhone', e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '' || /^[0-9]+$/.test(val)) {
+                          handleDeliveryFieldChange('deliveryBackupPhone', val);
+                        }
+                      }}
+                      onKeyPress={(e) => {
+                        if (!/[0-9]/.test(e.key)) {
+                          e.preventDefault();
+                        }
+                      }}
                       placeholder="Optional contact"
                       style={{
                         width: '100%',
@@ -2649,9 +2675,10 @@ const OrderSystem = () => {
                       Delivery Charge (PKR)
                     </label>
                     <input
-                      type="text"
+                      type="number"
                       inputMode="decimal"
                       value={deliveryCharge}
+                      onWheel={(e) => e.target.blur()}
                       onChange={(e) => handleDeliveryChargeChange(e.target.value)}
                       placeholder="0"
                       style={{
@@ -2918,6 +2945,7 @@ const OrderSystem = () => {
                       max="100"
                       step="0.01"
                       value={discountPercent || ''}
+                      onWheel={(e) => e.target.blur()}
                       onChange={(e) => {
                         const value = e.target.value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
                         updateActiveCart({ discountPercent: value });

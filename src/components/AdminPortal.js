@@ -270,7 +270,7 @@ const AdminPortal = ({ user, onLogout }) => {
     setUserForm({
       username: user.username,
       password: '',
-      full_name: user.full_name,
+      full_name: user.fullName || user.full_name,
       role: user.role,
       email: user.email || '',
       phone: user.phone || '',
@@ -369,22 +369,22 @@ const AdminPortal = ({ user, onLogout }) => {
       fetchMenuItems();
     } catch (err) {
       console.error('Menu item error:', err.response?.data);
-      
+
       // Extract detailed error message from response
       let errorMessage = 'Error: ' + (err.response?.data?.error || err.response?.data?.message || err.message);
-      
+
       // Check if it's a validation error with specific field errors
       if (err.response?.status === 400) {
         const errorData = err.response?.data;
-        
+
         // Check for field-specific errors array (from Zod validation)
         if (errorData?.errors && Array.isArray(errorData.errors) && errorData.errors.length > 0) {
           // Find imageUrl/image_url specific error
-          const imageError = errorData.errors.find(e => 
+          const imageError = errorData.errors.find(e =>
             (e.field && (e.field.includes('imageUrl') || e.field.includes('image_url'))) ||
             (e.message && (e.message.toLowerCase().includes('image') || e.message.toLowerCase().includes('url')))
           );
-          
+
           if (imageError) {
             errorMessage = `Invalid Image URL: ${imageError.message || 'Please provide a valid image link (e.g., https://example.com/image.jpg)'}`;
           } else {
@@ -407,7 +407,7 @@ const AdminPortal = ({ user, onLogout }) => {
           }
         }
       }
-      
+
       showError(errorMessage);
     }
   };
@@ -487,7 +487,7 @@ const AdminPortal = ({ user, onLogout }) => {
       const dayExpenses = dayExpensesList.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
 
       const dateObj = new Date(date);
-      const label = chartFilter === 'monthly' 
+      const label = chartFilter === 'monthly'
         ? dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
         : dateObj.toLocaleDateString('en-US', { weekday: 'short' });
 
@@ -1207,7 +1207,7 @@ const AdminPortal = ({ user, onLogout }) => {
                   onChange={(e) => {
                     const urlValue = e.target.value;
                     setMenuForm({ ...menuForm, image_url: urlValue });
-                    
+
                     // Validate URL format in real-time
                     if (urlValue && urlValue.trim() !== '') {
                       try {

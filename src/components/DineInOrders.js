@@ -112,7 +112,15 @@ const DineInOrders = () => {
         },
         total_orders: payload.totalOrders || 0,
         total_revenue: payload.totalRevenue || 0,
-        average_order_value: payload.totalOrders > 0 ? (payload.totalRevenue / payload.totalOrders) : 0
+        average_order_value: payload.totalOrders > 0 ? (payload.totalRevenue / payload.totalOrders) : 0,
+        cash_payments: {
+          count: payload.cashStats?.count || 0,
+          total_amount: payload.cashStats?.revenue || 0
+        },
+        bank_payments: {
+          count: payload.bankStats?.count || 0,
+          total_amount: payload.bankStats?.revenue || 0
+        }
       }));
     } catch (err) {
       console.error('Failed to load stats', err);
