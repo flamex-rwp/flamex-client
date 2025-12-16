@@ -37,6 +37,17 @@ const OrderSystem = () => {
   const { showSuccess, showError, showInfo } = useToast();
   const [menuItems, setMenuItems] = useState([]);
 
+  // Helper function to get initials for fallback image
+  const getInitials = (name) => {
+    if (!name) return '🍽️';
+    return name
+      .split(' ')
+      .map(word => word.charAt(0))
+      .slice(0, 2)
+      .join('')
+      .toUpperCase();
+  };
+
   // Add these missing state variables
   const [selectedCategory, setSelectedCategory] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
@@ -79,7 +90,7 @@ const OrderSystem = () => {
   useEffect(() => {
     const fetchOccupiedTables = async () => {
       if (isDelivery) return;
-      
+
       try {
         if (isOnline()) {
           // Fetch from API when online
@@ -103,14 +114,14 @@ const OrderSystem = () => {
           // Load from cache when offline
           const cachedTables = await getCachedTableAvailability();
           console.log('[OrderSystem] Cached tables from store:', cachedTables);
-          
+
           // Also check offline orders that might be occupying tables
           const allOrders = await getAllOrders();
           console.log('[OrderSystem] All orders from IndexedDB:', allOrders.length);
-          
+
           // Filter for dine-in orders with pending payment status and table numbers
           const offlineOccupiedTables = allOrders
-            .filter(order => 
+            .filter(order =>
               order.orderType === 'dine_in' &&
               order.paymentStatus === 'pending' &&
               order.orderStatus !== 'cancelled' &&
@@ -125,9 +136,9 @@ const OrderSystem = () => {
               orderNumber: order.orderNumber || order.order_number,
               order_number: order.orderNumber || order.order_number
             }));
-          
+
           console.log('[OrderSystem] Offline occupied tables from orders:', offlineOccupiedTables);
-          
+
           // Combine cached tables and offline orders, removing duplicates
           // Remove any cached tables that no longer have corresponding offline orders
           const combinedTables = [...cachedTables].filter(t => {
@@ -145,7 +156,7 @@ const OrderSystem = () => {
               combinedTables.push(offlineTable);
             }
           });
-          
+
           console.log('[OrderSystem] Combined occupied tables (offline):', combinedTables);
           setOccupiedTables(combinedTables);
         }
@@ -154,12 +165,12 @@ const OrderSystem = () => {
         // Try to load from cache as fallback
         try {
           const cachedTables = await getCachedTableAvailability();
-          
+
           // Also check offline orders
           try {
             const allOrders = await getAllOrders();
             const offlineOccupiedTables = allOrders
-              .filter(order => 
+              .filter(order =>
                 order.orderType === 'dine_in' &&
                 order.paymentStatus === 'pending' &&
                 order.orderStatus !== 'cancelled' &&
@@ -174,18 +185,18 @@ const OrderSystem = () => {
                 orderNumber: order.orderNumber || order.order_number,
                 order_number: order.orderNumber || order.order_number
               }));
-            
+
             const combinedTables = [...cachedTables];
             offlineOccupiedTables.forEach(offlineTable => {
               const tableNum = offlineTable.tableNumber;
-              const exists = combinedTables.some(t => 
+              const exists = combinedTables.some(t =>
                 (t.tableNumber || t.table_number) === tableNum
               );
               if (!exists) {
                 combinedTables.push(offlineTable);
               }
             });
-            
+
             setOccupiedTables(combinedTables);
           } catch (offlineError) {
             console.warn('Failed to load offline orders:', offlineError);
@@ -200,14 +211,14 @@ const OrderSystem = () => {
 
     // Fetch immediately on mount and when order type changes
     fetchOccupiedTables();
-    
+
     // Refresh when window becomes visible (user navigates back to tab)
     const handleVisibilityChange = () => {
       if (!document.hidden && !isDelivery) {
         fetchOccupiedTables();
       }
     };
-    
+
     // Refresh when window gains focus
     const handleFocus = () => {
       if (!isDelivery) {
@@ -217,11 +228,11 @@ const OrderSystem = () => {
 
     // Set up interval for periodic updates
     const interval = setInterval(fetchOccupiedTables, 30000);
-    
+
     // Add event listeners
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocus);
-    
+
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -232,15 +243,15 @@ const OrderSystem = () => {
   // Also update occupied tables when orders change (for offline mode)
   useEffect(() => {
     if (isDelivery || isOnline()) return;
-    
+
     const updateOccupiedTablesFromOrders = async () => {
       try {
         const cachedTables = await getCachedTableAvailability();
         const allOrders = await getAllOrders();
-        
+
         // Filter for dine-in orders with pending payment status and table numbers
         const offlineOccupiedTables = allOrders
-          .filter(order => 
+          .filter(order =>
             order.orderType === 'dine_in' &&
             order.paymentStatus === 'pending' &&
             order.orderStatus !== 'cancelled' &&
@@ -255,7 +266,7 @@ const OrderSystem = () => {
             orderNumber: order.orderNumber || order.order_number,
             order_number: order.orderNumber || order.order_number
           }));
-        
+
         // Combine cached tables and offline orders, removing duplicates
         const combinedTables = [...cachedTables].filter(t => {
           const tNum = t.tableNumber || t.table_number;
@@ -264,27 +275,27 @@ const OrderSystem = () => {
         offlineOccupiedTables.forEach(offlineTable => {
           const tableNum = offlineTable.tableNumber;
           // Check if this table is already in the list
-          const exists = combinedTables.some(t => 
+          const exists = combinedTables.some(t =>
             (t.tableNumber || t.table_number) === tableNum
           );
           if (!exists) {
             combinedTables.push(offlineTable);
           }
         });
-        
+
         console.log('[OrderSystem] Updated occupied tables from orders:', combinedTables);
         setOccupiedTables(combinedTables);
       } catch (error) {
         console.warn('Failed to update occupied tables from orders:', error);
       }
     };
-    
+
     // Update immediately
     updateOccupiedTablesFromOrders();
-    
+
     // Set up interval to check for changes
     const interval = setInterval(updateOccupiedTablesFromOrders, 5000);
-    
+
     return () => clearInterval(interval);
   }, [isDelivery]);
 
@@ -452,7 +463,7 @@ const OrderSystem = () => {
           // If editing and this is the same order, don't consider it occupied
           const occupiedOrderId = t.orderId || t.order_id || t.id;
           const occupiedOrderNumber = t.orderNumber || t.order_number;
-          
+
           if (editingOrder && (
             (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
             (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
@@ -476,7 +487,7 @@ const OrderSystem = () => {
         }
       }
     }
-    
+
     updateActiveCart({ tableNumber: value });
     setCheckoutError('');
   };
@@ -526,7 +537,7 @@ const OrderSystem = () => {
     setPhoneSearchLoading(true);
     try {
       let customers = [];
-      
+
       // Check if offline - use cached customers
       if (!isOnline()) {
         const { getCachedCustomers } = await import('../utils/offlineDB');
@@ -542,7 +553,7 @@ const OrderSystem = () => {
         try {
           const response = await customerAPI.searchByPhone(trimmedPhone, 10);
           customers = response.data?.data || response.data || [];
-          
+
           // Cache customers for offline use
           if (Array.isArray(customers) && customers.length > 0) {
             const { cacheCustomers } = await import('../utils/offlineDB');
@@ -563,7 +574,7 @@ const OrderSystem = () => {
           }
         }
       }
-      
+
       setPhoneSuggestions(Array.isArray(customers) ? customers : []);
       setShowPhoneSuggestions(true);
     } catch (err) {
@@ -586,13 +597,13 @@ const OrderSystem = () => {
   // Handle customer selection from phone suggestions
   const handleCustomerSelect = useCallback(async (customer) => {
     // Immediately update form fields for instant feedback
-    updateActiveCart({ 
+    updateActiveCart({
       deliveryPhone: customer.phone,
       deliveryName: customer.name,
       deliveryBackupPhone: customer.backupPhone || customer.backup_phone || ''
     });
     setCheckoutError('');
-    
+
     // Hide suggestions immediately
     setShowPhoneSuggestions(false);
     setPhoneSuggestions([]);
@@ -606,10 +617,10 @@ const OrderSystem = () => {
         // Online - fetch full customer data
         const response = await customerAPI.getById(customer.id);
         const fullCustomer = response.data?.data || response.data;
-        
+
         // Update selected customer with full data
         setSelectedCustomer(fullCustomer);
-        
+
         // Set first address if available
         const firstAddress = fullCustomer.addresses && fullCustomer.addresses.length > 0
           ? fullCustomer.addresses[0].address
@@ -656,19 +667,19 @@ const OrderSystem = () => {
       try {
         const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
         const cachedCustomers = await getCachedCustomers();
-        
+
         // Find existing customer by phone
-        const existingCustomer = cachedCustomers.find(c => 
+        const existingCustomer = cachedCustomers.find(c =>
           (c.phone || '').replace(/\s+/g, '') === phone
         );
-        
+
         if (existingCustomer) {
           // Customer exists, check if address is different
           const existingAddresses = existingCustomer.addresses || [];
-          const addressExists = existingAddresses.some(addr => 
+          const addressExists = existingAddresses.some(addr =>
             (addr.address || '').trim() === address.trim()
           );
-          
+
           // If address is different and provided, we'll queue it for sync
           if (address && !addressExists) {
             // Queue address update for sync
@@ -680,7 +691,7 @@ const OrderSystem = () => {
               data: { address }
             });
           }
-          
+
           return existingCustomer.id;
         } else {
           // Create offline customer
@@ -695,9 +706,9 @@ const OrderSystem = () => {
             synced: false,
             createdAt: new Date().toISOString()
           };
-          
+
           await saveCustomer(newCustomer);
-          
+
           // Queue customer creation for sync
           const { addPendingOperation } = await import('../utils/offlineDB');
           await addPendingOperation({
@@ -713,7 +724,7 @@ const OrderSystem = () => {
             },
             offlineId: offlineCustomerId
           });
-          
+
           return offlineCustomerId;
         }
       } catch (offlineErr) {
@@ -737,74 +748,74 @@ const OrderSystem = () => {
       return customer.id;
     } catch (err) {
       console.error('Failed to find or create customer:', err);
-      
-          // If network error, fall back to offline mode
-          if (err.code === 'ERR_NETWORK' || !err.response) {
-            try {
-              const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
-              const cachedCustomers = await getCachedCustomers();
-              
-              const existingCustomer = cachedCustomers.find(c => 
-                (c.phone || '').replace(/\s+/g, '') === phone
+
+      // If network error, fall back to offline mode
+      if (err.code === 'ERR_NETWORK' || !err.response) {
+        try {
+          const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
+          const cachedCustomers = await getCachedCustomers();
+
+          const existingCustomer = cachedCustomers.find(c =>
+            (c.phone || '').replace(/\s+/g, '') === phone
+          );
+
+          if (existingCustomer) {
+            // Customer exists - only add address if it's new, don't update user
+            if (address && address.trim()) {
+              const existingAddresses = existingCustomer.addresses || [];
+              const addressExists = existingAddresses.some(addr =>
+                (addr.address || '').trim().toLowerCase() === address.trim().toLowerCase()
               );
-              
-              if (existingCustomer) {
-                // Customer exists - only add address if it's new, don't update user
-                if (address && address.trim()) {
-                  const existingAddresses = existingCustomer.addresses || [];
-                  const addressExists = existingAddresses.some(addr => 
-                    (addr.address || '').trim().toLowerCase() === address.trim().toLowerCase()
-                  );
-                  
-                  if (!addressExists) {
-                    const { addPendingOperation } = await import('../utils/offlineDB');
-                    await addPendingOperation({
-                      type: 'add_customer_address',
-                      endpoint: `/api/customers/${existingCustomer.id}/addresses`,
-                      method: 'POST',
-                      data: { address: address.trim() }
-                    });
-                  }
-                }
-                return existingCustomer.id;
-              } else {
-                // Customer doesn't exist - create new entry
-                const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                const newCustomer = {
-                  id: offlineCustomerId,
-                  phone,
-                  name: name || 'Delivery Customer',
-                  backupPhone: backup || null,
-                  addresses: address ? [{ address: address.trim(), isDefault: true }] : [],
-                  notes: notes || null,
-                  synced: false,
-                  createdAt: new Date().toISOString()
-                };
-                
-                await saveCustomer(newCustomer);
-                
+
+              if (!addressExists) {
                 const { addPendingOperation } = await import('../utils/offlineDB');
                 await addPendingOperation({
-                  type: 'create_customer',
-                  endpoint: '/api/customers/find-or-create',
+                  type: 'add_customer_address',
+                  endpoint: `/api/customers/${existingCustomer.id}/addresses`,
                   method: 'POST',
-                  data: {
-                    phone,
-                    name: name || undefined,
-                    address: address || undefined,
-                    backupPhone: backup || undefined,
-                    notes: notes || undefined
-                  },
-                  offlineId: offlineCustomerId
+                  data: { address: address.trim() }
                 });
-                
-                return offlineCustomerId;
               }
-            } catch (fallbackErr) {
-              console.error('Fallback customer creation failed:', fallbackErr);
             }
+            return existingCustomer.id;
+          } else {
+            // Customer doesn't exist - create new entry
+            const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            const newCustomer = {
+              id: offlineCustomerId,
+              phone,
+              name: name || 'Delivery Customer',
+              backupPhone: backup || null,
+              addresses: address ? [{ address: address.trim(), isDefault: true }] : [],
+              notes: notes || null,
+              synced: false,
+              createdAt: new Date().toISOString()
+            };
+
+            await saveCustomer(newCustomer);
+
+            const { addPendingOperation } = await import('../utils/offlineDB');
+            await addPendingOperation({
+              type: 'create_customer',
+              endpoint: '/api/customers/find-or-create',
+              method: 'POST',
+              data: {
+                phone,
+                name: name || undefined,
+                address: address || undefined,
+                backupPhone: backup || undefined,
+                notes: notes || undefined
+              },
+              offlineId: offlineCustomerId
+            });
+
+            return offlineCustomerId;
           }
-      
+        } catch (fallbackErr) {
+          console.error('Fallback customer creation failed:', fallbackErr);
+        }
+      }
+
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message;
       throw new Error(errorMsg || 'Unable to process customer information');
     }
@@ -818,7 +829,7 @@ const OrderSystem = () => {
     try {
       let orderDetails = {};
       let itemDetails = [];
-      
+
       // Check if this is an offline order
       if (orderMeta.offline || String(orderMeta.id).startsWith('OFFLINE-')) {
         // Load from IndexedDB
@@ -1006,20 +1017,20 @@ const OrderSystem = () => {
       prevCarts.map(c =>
         c.id === activeCartId
           ? {
-              ...c,
-              items: (() => {
-                const existingItem = c.items.find(cartItem => cartItem.id === item.id);
-                if (existingItem) {
-                  return c.items.map(cartItem =>
-                    cartItem.id === item.id
-                      ? { ...cartItem, quantity: cartItem.quantity + 1 }
-                      : cartItem
-                  );
-                } else {
-                  return [...c.items, { ...item, quantity: 1 }];
-                }
-              })()
-            }
+            ...c,
+            items: (() => {
+              const existingItem = c.items.find(cartItem => cartItem.id === item.id);
+              if (existingItem) {
+                return c.items.map(cartItem =>
+                  cartItem.id === item.id
+                    ? { ...cartItem, quantity: cartItem.quantity + 1 }
+                    : cartItem
+                );
+              } else {
+                return [...c.items, { ...item, quantity: 1 }];
+              }
+            })()
+          }
           : c
       )
     );
@@ -1030,13 +1041,13 @@ const OrderSystem = () => {
       prevCarts.map(c =>
         c.id === activeCartId
           ? {
-              ...c,
-              items: quantity <= 0
-                ? c.items.filter(item => item.id !== itemId)
-                : c.items.map(item =>
-                    item.id === itemId ? { ...item, quantity } : item
-                  )
-            }
+            ...c,
+            items: quantity <= 0
+              ? c.items.filter(item => item.id !== itemId)
+              : c.items.map(item =>
+                item.id === itemId ? { ...item, quantity } : item
+              )
+          }
           : c
       )
     );
@@ -1095,7 +1106,7 @@ const OrderSystem = () => {
           // If editing and this is the same order, don't consider it occupied
           const occupiedOrderId = t.orderId || t.order_id || t.id;
           const occupiedOrderNumber = t.orderNumber || t.order_number;
-          
+
           if (editingOrder && (
             (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
             (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
@@ -1188,7 +1199,7 @@ const OrderSystem = () => {
               ...updateData,
               updatedAt: new Date().toISOString()
             });
-            
+
             // Queue update operation for sync
             await addPendingOperation({
               type: 'update_order',
@@ -1197,7 +1208,7 @@ const OrderSystem = () => {
               data: updateData,
               offlineId: offlineId
             });
-            
+
             orderNumber = editingOrder.order_number;
             isOffline = true;
             showSuccess(`Order #${orderNumber || editingOrder.id} updated offline. It will sync when you are back online.`);
@@ -1274,31 +1285,31 @@ const OrderSystem = () => {
             const cleanedOrderData = {
               ...orderData,
               // Ensure tableNumber is always a string (never a number)
-              tableNumber: orderData.tableNumber 
-                ? (typeof orderData.tableNumber === 'string' 
-                    ? (orderData.tableNumber.trim() !== '' ? orderData.tableNumber : undefined)
-                    : String(orderData.tableNumber))
+              tableNumber: orderData.tableNumber
+                ? (typeof orderData.tableNumber === 'string'
+                  ? (orderData.tableNumber.trim() !== '' ? orderData.tableNumber : undefined)
+                  : String(orderData.tableNumber))
                 : undefined,
               deliveryAddress: orderData.deliveryAddress && orderData.deliveryAddress.trim() !== '' ? orderData.deliveryAddress : undefined,
               deliveryNotes: orderData.deliveryNotes && orderData.deliveryNotes.trim() !== '' ? orderData.deliveryNotes : undefined,
               googleMapsLink: orderData.googleMapsLink && orderData.googleMapsLink.trim() !== '' ? orderData.googleMapsLink : undefined,
               specialInstructions: orderData.specialInstructions && orderData.specialInstructions.trim() !== '' ? orderData.specialInstructions : undefined,
             };
-            
+
             console.log('Creating order with cleaned data:', cleanedOrderData);
             const response = await ordersAPI.create(cleanedOrderData);
             orderId = response.data.data?.id;
             orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
-            
+
             if (!orderId) {
               throw new Error('Order was created but no ID was returned from server');
             }
-            
+
             showSuccess(`Order #${orderNumber || orderId} created successfully!`);
-            
+
             // Dispatch event to refresh badges immediately
-            window.dispatchEvent(new CustomEvent('orderCreated', { 
-              detail: { orderType: orderType, orderId, orderNumber } 
+            window.dispatchEvent(new CustomEvent('orderCreated', {
+              detail: { orderType: orderType, orderId, orderNumber }
             }));
           } catch (error) {
             console.error('Order creation error details:', {
@@ -1309,13 +1320,13 @@ const OrderSystem = () => {
               orderData
             });
             console.error('Failed to create order online:', error);
-            
+
             // Only save offline if it's a network error, not a validation/server error
-            const isNetworkError = !error.response || 
-                                  error.code === 'ERR_NETWORK' || 
-                                  error.message === 'Network Error' ||
-                                  (error.response && error.response.status >= 500);
-            
+            const isNetworkError = !error.response ||
+              error.code === 'ERR_NETWORK' ||
+              error.message === 'Network Error' ||
+              (error.response && error.response.status >= 500);
+
             if (isNetworkError) {
               console.warn('Network error detected, saving offline:', error);
               const savedOrder = await saveOfflineOrder(orderData);
@@ -1323,22 +1334,22 @@ const OrderSystem = () => {
               orderNumber = null;
               isOffline = true;
               showInfo('Order saved offline. It will sync when you are back online.');
-              
+
               // Reserve table locally for offline order
               if (!isDelivery && reserveTableRef.current) {
                 await reserveTableRef.current(tableNumber, { orderId, orderNumber });
               }
-              
+
               // Dispatch event for offline orders too
-              window.dispatchEvent(new CustomEvent('orderCreated', { 
-                detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
+              window.dispatchEvent(new CustomEvent('orderCreated', {
+                detail: { orderType: orderType, orderId, orderNumber: null, offline: true }
               }));
             } else {
               // Server validation error or other API error - show error message and STOP
               const errorData = error.response?.data || {};
               const validationErrors = errorData.errors || [];
               let errorMessage = errorData.error || errorData.message || error.message || 'Failed to create order. Please check your input and try again.';
-              
+
               // If there are specific validation errors, show them
               if (validationErrors.length > 0) {
                 const errorDetails = validationErrors.map(err => {
@@ -1348,7 +1359,7 @@ const OrderSystem = () => {
                 }).join(', ');
                 errorMessage = `Validation failed: ${errorDetails}`;
               }
-              
+
               console.error('Order creation failed - Full error details:', {
                 errorMessage,
                 validationErrors,
@@ -1356,7 +1367,7 @@ const OrderSystem = () => {
                 orderData,
                 status: error.response?.status
               });
-              
+
               setCheckoutError(errorMessage);
               showError(errorMessage);
               // Return early - don't print receipt or clear cart if order creation failed
@@ -1369,15 +1380,15 @@ const OrderSystem = () => {
           orderNumber = null;
           isOffline = true;
           showInfo('Order saved offline. It will sync when you are back online.');
-          
+
           // Reserve table locally for offline order
           if (!isDelivery && reserveTableRef.current) {
             await reserveTableRef.current(tableNumber, { orderId, orderNumber });
           }
-          
+
           // Dispatch event for offline orders
-          window.dispatchEvent(new CustomEvent('orderCreated', { 
-            detail: { orderType: orderType, orderId, orderNumber: null, offline: true } 
+          window.dispatchEvent(new CustomEvent('orderCreated', {
+            detail: { orderType: orderType, orderId, orderNumber: null, offline: true }
           }));
         }
       }
@@ -1472,7 +1483,7 @@ const OrderSystem = () => {
     searchDebounceRef.current = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
     }, 300); // 300ms debounce
-    
+
     return () => {
       if (searchDebounceRef.current) {
         clearTimeout(searchDebounceRef.current);
@@ -1526,7 +1537,7 @@ const OrderSystem = () => {
   // Check if selected table is occupied (for dine-in orders)
   const isSelectedTableOccupied = useMemo(() => {
     if (isDelivery || !tableNumber) return false;
-    
+
     const tableNum = parseInt(tableNumber);
     if (isNaN(tableNum)) return false;
 
@@ -1541,7 +1552,7 @@ const OrderSystem = () => {
       )) {
         return false;
       }
-      
+
       // Check both tableNumber and table_number fields, ensure proper number comparison
       const occupiedTableNum = t.tableNumber || t.table_number;
       if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
@@ -1584,6 +1595,7 @@ const OrderSystem = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSubmitOrder, editingOrder]);
+
 
   return (
     <>
@@ -1687,10 +1699,10 @@ const OrderSystem = () => {
           <div style={{
             flex: 1,
             overflowY: 'auto',
-            padding: '1.5rem',
+            padding: '1rem',
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-            gap: '1.25rem',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+            gap: '1rem',
             alignContent: 'start'
           }}>
             {filteredItems.length === 0 ? (
@@ -1704,6 +1716,15 @@ const OrderSystem = () => {
                 <div style={{ fontSize: '1.2rem', fontWeight: '600' }}>
                   {searchTerm ? 'No items found matching your search' : 'No available items in this category'}
                 </div>
+                {searchTerm && (
+                  <div style={{
+                    fontSize: '0.9rem',
+                    color: '#adb5bd',
+                    marginTop: '0.5rem'
+                  }}>
+                    Try different keywords or browse categories
+                  </div>
+                )}
               </div>
             ) : (
               filteredItems.map(item => (
@@ -1712,37 +1733,38 @@ const OrderSystem = () => {
                   onClick={() => addToCart(item)}
                   style={{
                     background: 'white',
-                    borderRadius: '16px',
-                    padding: '1.25rem',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+                    borderRadius: '12px',
+                    padding: '1rem',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
                     cursor: 'pointer',
-                    transition: 'all 0.3s',
-                    border: '2px solid transparent',
+                    transition: 'all 0.2s ease',
+                    border: '1px solid #e9ecef',
                     display: 'flex',
                     flexDirection: 'column',
                     height: '100%',
+                    minHeight:'300px',
                     position: 'relative',
                     overflow: 'hidden'
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-4px)';
-                    e.currentTarget.style.boxShadow = '0 8px 24px rgba(102, 126, 234, 0.3)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.12)';
                     e.currentTarget.style.borderColor = 'var(--color-primary)';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)';
-                    e.currentTarget.style.borderColor = 'transparent';
+                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
+                    e.currentTarget.style.borderColor = '#e9ecef';
                   }}
                 >
-                  {/* Image */}
+                  {/* Image Container */}
                   <div style={{
                     width: '100%',
-                    height: '150px',
-                    marginBottom: '0.85rem',
-                    borderRadius: '14px',
+                    height: '160px',
+                    marginBottom: '0.75rem',
+                    borderRadius: '8px',
                     overflow: 'hidden',
-                    background: '#f1f3f5',
+                    background: '#f8f9fa',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1761,60 +1783,163 @@ const OrderSystem = () => {
                         onError={(e) => {
                           e.target.style.display = 'none';
                           const emoji = (item.name?.trim()?.charAt(0)) || '🍽️';
-                          e.target.parentElement.innerHTML = `<div style="color: #6c757d; font-size: 2.4rem; font-weight: 700;">${emoji}</div>`;
+                          e.target.parentElement.innerHTML = `
+                  <div style="
+                    width: 100%;
+                    height: 100%;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 1rem;
+                    text-align: center;
+                  ">
+                    <div style="
+                      font-size: 2rem;
+                      font-weight: 700;
+                      margin-bottom: 0.25rem;
+                    ">
+                      ${getInitials(item.name)}
+                    </div>
+                    <div style="
+                      font-size: 0.8rem;
+                      font-weight: 500;
+                      opacity: 0.9;
+                      max-width: 90%;
+                      line-height: 1.2;
+                    ">
+                      ${item.name}
+                    </div>
+                  </div>
+                `;
                         }}
                       />
                     ) : (
-                      <div style={{ color: '#6c757d', fontSize: '2.4rem', fontWeight: 700 }}>
-                        { (item.name?.trim()?.charAt(0)) || '🍽️' }
+                      <div style={{
+                        width: '100%',
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        color: 'white',
+                        padding: '1rem',
+                        textAlign: 'center'
+                      }}>
+                        <div style={{
+                          fontSize: '2rem',
+                          fontWeight: '700',
+                          marginBottom: '0.25rem'
+                        }}>
+                          {getInitials(item.name)}
+                        </div>
+                        <div style={{
+                          fontSize: '0.8rem',
+                          fontWeight: '500',
+                          opacity: '0.9',
+                          maxWidth: '90%',
+                          lineHeight: '1.2'
+                        }}>
+                          {item.name}
+                        </div>
                       </div>
                     )}
                   </div>
 
+                  {/* Category Badge */}
                   <div style={{
-                    fontSize: '0.75rem',
-                    color: '#6c757d',
+                    fontSize: '0.7rem',
+                    color: 'var(--color-primary)',
                     fontWeight: '600',
                     textTransform: 'uppercase',
                     letterSpacing: '0.5px',
-                    marginBottom: '0.5rem'
+                    marginBottom: '0.4rem'
                   }}>
                     {item.category?.name || 'Uncategorized'}
                   </div>
+
+                  {/* Item Name */}
                   <h3 style={{
                     margin: '0 0 0.5rem 0',
-                    fontSize: '1.1rem',
-                    fontWeight: 'bold',
+                    fontSize: '1rem',
+                    fontWeight: '600',
                     color: '#212529',
                     flex: 1,
-                    lineHeight: '1.3'
+                    lineHeight: '1.3',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minHeight: '2.6em'
                   }}>
                     {item.name}
                   </h3>
+
+                  {/* Description */}
                   {item.description && (
                     <p style={{
-                      margin: '0 0 1rem 0',
-                      fontSize: '0.85rem',
+                      margin: '0 0 0.75rem 0',
+                      fontSize: '0.8rem',
                       color: '#6c757d',
                       lineHeight: '1.4',
                       display: '-webkit-box',
                       WebkitLineClamp: 2,
                       WebkitBoxOrient: 'vertical',
                       overflow: 'hidden',
-                      textOverflow: 'ellipsis'
+                      textOverflow: 'ellipsis',
+                      flexShrink: 0
                     }}>
                       {item.description}
                     </p>
                   )}
+
+                  {/* Price and Add Button */}
                   <div style={{
-                    fontSize: '1.5rem',
-                    fontWeight: 'bold',
-                    background: 'var(--gradient-primary)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                     marginTop: 'auto'
                   }}>
-                    PKR {parseFloat(item.price).toFixed(2)}
+                    <div style={{
+                      fontSize: '1.1rem',
+                      fontWeight: 'bold',
+                      color: 'var(--color-primary)'
+                    }}>
+                      PKR {parseFloat(item.price).toFixed(2)}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        addToCart(item);
+                      }}
+                      style={{
+                        background: 'var(--gradient-primary)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '6px',
+                        padding: '0.4rem 0.8rem',
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'scale(1.05)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'scale(1)';
+                      }}
+                    >
+                      <span>Add</span>
+                      <span style={{ fontSize: '0.9rem' }}>+</span>
+                    </button>
                   </div>
                 </div>
               ))
@@ -2147,7 +2272,7 @@ const OrderSystem = () => {
                         // If editing and this is the same order, don't consider it occupied
                         const occupiedOrderId = t.orderId || t.order_id || t.id;
                         const occupiedOrderNumber = t.orderNumber || t.order_number;
-                        
+
                         if (editingOrder && (
                           (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
                           (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
@@ -2247,7 +2372,7 @@ const OrderSystem = () => {
                     // If editing and this is the same order, don't consider it occupied
                     const occupiedOrderId = t.orderId || t.order_id || t.id;
                     const occupiedOrderNumber = t.orderNumber || t.order_number;
-                    
+
                     if (editingOrder && (
                       (occupiedOrderId && String(occupiedOrderId) === String(editingOrder.id)) ||
                       (occupiedOrderNumber && String(occupiedOrderNumber) === String(editingOrder.order_number))
@@ -2346,7 +2471,7 @@ const OrderSystem = () => {
                       />
                     </label>
                     {showPhoneSuggestions && phoneSuggestions.length > 0 && (
-                      <div 
+                      <div
                         data-suggestions
                         onMouseDown={(e) => {
                           // Prevent blur event when clicking inside dropdown
@@ -2896,8 +3021,8 @@ const OrderSystem = () => {
                       background: canSubmitOrder
                         ? 'var(--gradient-primary)'
                         : isSelectedTableOccupied
-                        ? '#ffc107'
-                        : 'var(--color-border)',
+                          ? '#ffc107'
+                          : 'var(--color-border)',
                       color: 'white',
                       fontSize: '1rem',
                       fontWeight: 'bold',
