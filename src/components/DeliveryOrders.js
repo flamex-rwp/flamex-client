@@ -98,7 +98,7 @@ const DeliveryOrders = () => {
       let apiOrders = [];
       if (online) {
         try {
-          const response = await ordersAPI.getDeliveryOrders({ ...params, useCache: false, disableCacheFallback: true });
+          const response = await ordersAPI.getDeliveryOrders({ ...params, useCache: false, disableCacheFallback: true, _t: Date.now() });
           apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
 
           // Merge preserved offline status from IndexedDB into API orders
@@ -215,8 +215,8 @@ const DeliveryOrders = () => {
       if (online) {
         try {
           const [pendingResponse, completedResponse] = await Promise.all([
-            ordersAPI.getDeliveryOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true }),
-            ordersAPI.getDeliveryOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true })
+            ordersAPI.getDeliveryOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true, _t: Date.now() }),
+            ordersAPI.getDeliveryOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true, _t: Date.now() })
           ]);
           pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
           completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
@@ -347,7 +347,7 @@ const DeliveryOrders = () => {
         return;
       }
 
-      const response = await ordersAPI.getDeliveryStats({ params, useCache: false, disableCacheFallback: true });
+      const response = await ordersAPI.getDeliveryStats({ params: { ...params, _t: Date.now() }, useCache: false, disableCacheFallback: true });
       const data = response.data?.data || response.data || {};
       // Always merge with defaults to ensure all fields exist
       const merged = mergeStats(data);
@@ -560,12 +560,10 @@ const DeliveryOrders = () => {
 
 
         // Update local state immediately and move to completed tab (no page refresh)
+        // Update local state immediately (do not move between tabs for delivery orders)
         const updatedOrder = { ...order, ...updatedData };
-        setPendingOrders(prev => prev.filter(o => o.id !== order.id));
-        setCompletedOrders(prev => {
-          const exists = prev.find(o => o.id === order.id);
-          return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
-        });
+        setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+        setCompletedOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
 
         showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
         closePaymentModal();
@@ -595,11 +593,8 @@ const DeliveryOrders = () => {
           amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
           return_amount: payload.returnAmount || 0
         };
-        setPendingOrders(prev => prev.filter(o => o.id !== order.id));
-        setCompletedOrders(prev => {
-          const exists = prev.find(o => o.id === order.id);
-          return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
-        });
+        setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+        setCompletedOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
 
         showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
         closePaymentModal();
@@ -799,25 +794,21 @@ const DeliveryOrders = () => {
           });
 
           // Also update order status
-          if (newStatus === 'delivered') {
-            // If delivered, mark order as completed
-            await addPendingOperation({
-              type: 'update_order_status',
-              endpoint: `/api/orders/${realOrderId}/status`,
-              method: 'PUT',
-              data: { order_status: 'completed' },
-              offlineId: offlineIdForSync // Store offlineId for sync matching
-            });
-          } else {
-            // If changing from delivered to something else, update order status too
-            await addPendingOperation({
-              type: 'update_order_status',
-              endpoint: `/api/orders/${realOrderId}/status`,
-              method: 'PUT',
-              data: { order_status: newStatus },
-              offlineId: offlineIdForSync // Store offlineId for sync matching
-            });
+          // Map delivery status to valid order status
+          let mappedOrderStatus = newStatus;
+          if (newStatus === 'out_for_delivery') {
+            mappedOrderStatus = 'ready';
+          } else if (newStatus === 'delivered') {
+            mappedOrderStatus = 'completed';
           }
+
+          await addPendingOperation({
+            type: 'update_order_status',
+            endpoint: `/api/orders/${realOrderId}/status`,
+            method: 'PUT',
+            data: { order_status: mappedOrderStatus },
+            offlineId: offlineIdForSync // Store offlineId for sync matching
+          });
         } else {
           // For non-delivery statuses, update order status
           await addPendingOperation({
@@ -890,12 +881,15 @@ const DeliveryOrders = () => {
             await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
 
             // If delivered, also mark order as completed
-            if (newStatus === 'delivered') {
-              await ordersAPI.updateOrderStatus(orderIdStr, 'completed');
-            } else {
-              // If changing from delivered to something else, update order status too
-              await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
+            // Map delivery status to valid order status
+            let mappedOrderStatus = newStatus;
+            if (newStatus === 'out_for_delivery') {
+              mappedOrderStatus = 'ready';
+            } else if (newStatus === 'delivered') {
+              mappedOrderStatus = 'completed';
             }
+
+            await ordersAPI.updateOrderStatus(orderIdStr, mappedOrderStatus);
           } else {
             // For non-delivery statuses, update order status
             await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
@@ -942,21 +936,20 @@ const DeliveryOrders = () => {
               });
 
               // Also update order status
-              if (newStatus === 'delivered') {
-                await addPendingOperation({
-                  type: 'update_order_status',
-                  endpoint: `/api/orders/${realOrderId}/status`,
-                  method: 'PUT',
-                  data: { order_status: 'completed' }
-                });
-              } else {
-                await addPendingOperation({
-                  type: 'update_order_status',
-                  endpoint: `/api/orders/${realOrderId}/status`,
-                  method: 'PUT',
-                  data: { order_status: newStatus }
-                });
+              // Map delivery status to valid order status
+              let mappedOrderStatus = newStatus;
+              if (newStatus === 'out_for_delivery') {
+                mappedOrderStatus = 'ready';
+              } else if (newStatus === 'delivered') {
+                mappedOrderStatus = 'completed';
               }
+
+              await addPendingOperation({
+                type: 'update_order_status',
+                endpoint: `/api/orders/${realOrderId}/status`,
+                method: 'PUT',
+                data: { order_status: mappedOrderStatus }
+              });
             } else {
               // For non-delivery statuses, update order status
               await addPendingOperation({
@@ -1676,7 +1669,7 @@ const DeliveryOrders = () => {
                   <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                     {(() => {
                       const orderStatus = order.orderStatus || order.order_status;
-                      const deliveryStatus = order.deliveryStatus || order.delivery_status;
+                      const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
 
                       // User requirement: "only show completed if status is delivered or out for delivery"
                       // If orderStatus claims "completed" but deliveryStatus is NOT completed/delivered,
@@ -1684,7 +1677,7 @@ const DeliveryOrders = () => {
                       let displayStatus = orderStatus;
 
                       if (orderStatus === 'completed') {
-                        if (deliveryStatus && deliveryStatus !== 'delivered' && deliveryStatus !== 'out_for_delivery') {
+                        if (deliveryStatus && deliveryStatus !== 'delivered') {
                           displayStatus = deliveryStatus;
                         }
                       }
