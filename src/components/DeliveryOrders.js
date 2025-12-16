@@ -46,7 +46,7 @@ const DeliveryOrders = () => {
     total_revenue: 0,
     average_order_value: 0
   };
-  
+
   // Define mergeStats outside component or use useCallback to make it stable
   const mergeStats = useCallback((incoming = {}) => ({
     ...defaultStats,
@@ -59,7 +59,7 @@ const DeliveryOrders = () => {
     cash_payments: { ...defaultStats.cash_payments, ...(incoming.cash_payments || {}) },
     bank_payments: { ...defaultStats.bank_payments, ...(incoming.bank_payments || {}) }
   }), []);
-  
+
   const [stats, setStats] = useState(() => ({ ...defaultStats }));
   const [paymentModal, setPaymentModal] = useState({
     open: false,
@@ -100,7 +100,7 @@ const DeliveryOrders = () => {
         try {
           const response = await ordersAPI.getDeliveryOrders({ ...params, useCache: false, disableCacheFallback: true });
           apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
-          
+
           // Merge preserved offline status from IndexedDB into API orders
           // This ensures that orders with offline status updates don't revert to pending
           apiOrders = await mergePreservedOfflineStatus(apiOrders);
@@ -116,15 +116,15 @@ const DeliveryOrders = () => {
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
           const isDelivery = orderData.order_type === 'delivery' || orderData.orderType === 'delivery';
-          
+
           if (isDelivery) {
             const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
-            
+
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
             const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
             const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
-            const isCompleted = orderStatus === 'completed' || paymentStatus === 'completed';
-            
+            const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+
             return {
               ...orderData,
               id: uniqueOfflineId,
@@ -153,28 +153,27 @@ const DeliveryOrders = () => {
         const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
         const paymentStatus = offlineOrder.paymentStatus || offlineOrder.payment_status || 'pending';
         const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
-        
+
         // Order is completed if:
         // 1. orderStatus is 'completed', OR
         // 2. paymentStatus is 'completed', OR
         // 3. deliveryStatus is 'delivered' (for delivery orders)
-        const isCompleted = orderStatus === 'completed' || 
-                           paymentStatus === 'completed' ||
-                           deliveryStatus === 'delivered';
-        
+        const isCompleted = orderStatus === 'completed' ||
+          deliveryStatus === 'delivered';
+
         const matchesTab = targetTab === 'pending' ? !isCompleted : isCompleted;
         return matchesTab;
       });
-      
+
 
       // Merge API and offline orders, remove duplicates
       const allOrders = [...apiOrders];
       const apiOrderNumbers = new Set(apiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
-      
+
       filteredOfflineOrders.forEach(offlineOrder => {
         const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
         const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
-        
+
         if (!exists) {
           allOrders.push(offlineOrder);
         }
@@ -221,17 +220,17 @@ const DeliveryOrders = () => {
           ]);
           pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
           completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
-          
+
           // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
           // For delivery orders, also ensure delivery_status is 'delivered' when order is completed
           const normalizeOrderStatus = (order) => {
             // Keep server statuses as-is for delivery; do not auto-complete on payment
             return { ...order };
           };
-          
+
           pendingApiOrders = pendingApiOrders.map(normalizeOrderStatus);
           completedApiOrders = completedApiOrders.map(normalizeOrderStatus);
-          
+
           // Merge preserved offline status from IndexedDB into API orders
           // This ensures that orders with offline status updates don't revert to pending
           pendingApiOrders = await mergePreservedOfflineStatus(pendingApiOrders);
@@ -250,16 +249,16 @@ const DeliveryOrders = () => {
           // Only include delivery orders
           if (orderData.order_type === 'delivery' || orderData.orderType === 'delivery') {
             const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
-            
+
             // Determine order status - check multiple fields and preserve actual status
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
             const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
             // For delivery orders, default deliveryStatus to 'pending' if not set
             const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
-            
+
             // Only mark as completed if orderStatus is actually 'completed' or delivery is delivered
             const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
-            
+
             return {
               ...orderData,
               id: uniqueOfflineId,
@@ -289,20 +288,20 @@ const DeliveryOrders = () => {
         ...pendingApiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean),
         ...completedApiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean)
       ]);
-      
+
       offlineOrders.forEach(offlineOrder => {
         const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
         const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
-        
+
         if (!exists) {
           // Check if order is completed based on status
           // For delivery orders, also check deliveryStatus - if 'delivered', it should be in completed
           const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
           const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
-          
+
           // Don't mark as completed just because paymentStatus is completed; delivery must be completed or explicitly set
           const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
-          
+
           if (isCompleted) {
             offlineCompletedOrders.push(offlineOrder);
           } else {
@@ -321,7 +320,7 @@ const DeliveryOrders = () => {
         const dateB = new Date(b.createdAt || b.created_at || 0);
         return dateB - dateA;
       });
-      
+
       allCompletedOrders.sort((a, b) => {
         const dateA = new Date(a.createdAt || a.created_at || 0);
         const dateB = new Date(b.createdAt || b.created_at || 0);
@@ -402,7 +401,7 @@ const DeliveryOrders = () => {
           // First, sync pending operations (offline orders and updates) to the database
           console.log('[DeliveryOrders] Coming back online - syncing pending operations...');
           const syncResult = await syncPendingOperations();
-          
+
           // Only refresh orders from database if sync was successful (or no pending operations)
           if (syncResult && (syncResult.synced > 0 || syncResult.failed === 0)) {
             console.log('[DeliveryOrders] Sync completed successfully, refreshing orders from database...');
@@ -431,7 +430,7 @@ const DeliveryOrders = () => {
           }
         }
       };
-      
+
       // Small delay to ensure network is stable
       const timer = setTimeout(syncAndRefresh, 1000);
       prevOnlineRef.current = online;
@@ -506,7 +505,7 @@ const DeliveryOrders = () => {
     }
 
     setMarkingPaidId(order.id);
-    
+
     // Build payload outside try block so it's accessible in catch block
     const payload = {
       paymentMethod: paymentMethod
@@ -517,15 +516,15 @@ const DeliveryOrders = () => {
       payload.amountTaken = taken;
       payload.returnAmount = Math.max(0, taken - parseFloat(order.total_amount));
     }
-    
+
     try {
       // Check if offline
       if (!isOnline() || order.offline) {
         // Extract the real offline ID (IndexedDB ID) for updating
-        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-') 
-          ? order.id.replace(/^OFFLINE-/, '').split('-')[0] 
+        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-')
+          ? order.id.replace(/^OFFLINE-/, '').split('-')[0]
           : order.id);
-        
+
         const updatedData = {
           payment_method: paymentMethod,
           paymentMethod,
@@ -533,21 +532,21 @@ const DeliveryOrders = () => {
           return_amount: payload.returnAmount || 0,
           payment_status: 'completed',
           paymentStatus: 'completed',
-          order_status: 'completed',
-          orderStatus: 'completed',
-          // For delivery orders, also set delivery_status to 'delivered' when marked as paid
-          delivery_status: 'delivered',
-          deliveryStatus: 'delivered',
+          // Keep existing statuses
+          order_status: order.order_status,
+          orderStatus: order.orderStatus,
+          delivery_status: order.delivery_status,
+          deliveryStatus: order.deliveryStatus,
           offlineStatusUpdated: true
         };
-        
+
         // Update the order in IndexedDB with completed status
         try {
           await updateOfflineOrder(realOfflineId, updatedData);
         } catch (updateError) {
           // Silently handle update errors
         }
-        
+
         // Queue operations for sync - use the real offline ID
         await addPendingOperation({
           type: 'mark_as_paid',
@@ -556,24 +555,10 @@ const DeliveryOrders = () => {
           data: payload,
           offlineId: realOfflineId
         });
-        
-        await addPendingOperation({
-          type: 'update_order_status',
-          endpoint: `/api/orders/${realOfflineId}/status`,
-          method: 'PUT',
-          data: { order_status: 'completed' },
-          offlineId: realOfflineId
-        });
-        
-        // Also queue delivery status update for delivery orders
-        await addPendingOperation({
-          type: 'update_delivery_status',
-          endpoint: `/api/orders/${realOfflineId}/delivery/status`,
-          method: 'PUT',
-          data: { deliveryStatus: 'delivered' },
-          offlineId: realOfflineId
-        });
-        
+
+        // Only queue mark_as_paid, do NOT auto-complete order or delivery status
+
+
         // Update local state immediately and move to completed tab (no page refresh)
         const updatedOrder = { ...order, ...updatedData };
         setPendingOrders(prev => prev.filter(o => o.id !== order.id));
@@ -581,30 +566,31 @@ const DeliveryOrders = () => {
           const exists = prev.find(o => o.id === order.id);
           return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
         });
-        
+
         showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
         closePaymentModal();
-        
+
         // Only refresh stats, not orders (already updated locally)
         fetchStats();
-        
+
         // Dispatch event to refresh badges immediately
-        window.dispatchEvent(new CustomEvent('orderUpdated', { 
-          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid', offline: true } 
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid', offline: true }
         }));
       } else {
         // Online mode
         await ordersAPI.markAsPaid(order.id, payload);
-        
+
         // Update local state immediately and move to completed tab (no page refresh)
         const updatedOrder = {
           ...order,
           payment_status: 'completed',
           paymentStatus: 'completed',
-          order_status: 'completed',
-          orderStatus: 'completed',
-          delivery_status: 'delivered',
-          deliveryStatus: 'delivered',
+          // Keep existing statuses
+          order_status: order.order_status,
+          orderStatus: order.orderStatus,
+          delivery_status: order.delivery_status,
+          deliveryStatus: order.deliveryStatus,
           payment_method: paymentMethod,
           amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
           return_amount: payload.returnAmount || 0
@@ -614,26 +600,26 @@ const DeliveryOrders = () => {
           const exists = prev.find(o => o.id === order.id);
           return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
         });
-        
+
         showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
         closePaymentModal();
 
         // Only refresh stats, not orders (already updated locally)
         fetchStats();
-        
+
         // Dispatch event to refresh badges immediately
-        window.dispatchEvent(new CustomEvent('orderUpdated', { 
-          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid' } 
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { orderType: 'delivery', orderId: order.id, action: 'markedPaid' }
         }));
       }
     } catch (err) {
       console.error('Failed to mark order as paid', err);
       // If online but API fails, fall back to offline mode
       if (err.code === 'ERR_NETWORK' || !isOnline()) {
-        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-') 
-          ? order.id.replace(/^OFFLINE-/, '').split('-')[0] 
+        const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-')
+          ? order.id.replace(/^OFFLINE-/, '').split('-')[0]
           : order.id);
-        
+
         const updatedData = {
           payment_method: paymentMethod,
           paymentMethod,
@@ -641,14 +627,14 @@ const DeliveryOrders = () => {
           return_amount: payload.returnAmount || 0,
           payment_status: 'completed',
           paymentStatus: 'completed',
-          order_status: 'completed',
-          orderStatus: 'completed',
-          // For delivery orders, also set delivery_status to 'delivered' when marked as paid
-          delivery_status: 'delivered',
-          deliveryStatus: 'delivered',
+          // Keep existing statuses
+          order_status: order.order_status,
+          orderStatus: order.orderStatus,
+          delivery_status: order.delivery_status,
+          deliveryStatus: order.deliveryStatus,
           offlineStatusUpdated: true
         };
-        
+
         try {
           await updateOfflineOrder(realOfflineId, updatedData);
           await addPendingOperation({
@@ -658,23 +644,9 @@ const DeliveryOrders = () => {
             data: payload,
             offlineId: realOfflineId
           });
-          await addPendingOperation({
-            type: 'update_order_status',
-            endpoint: `/api/orders/${realOfflineId}/status`,
-            method: 'PUT',
-            data: { order_status: 'completed' },
-            offlineId: realOfflineId
-          });
-          
-          // Also queue delivery status update for delivery orders
-          await addPendingOperation({
-            type: 'update_delivery_status',
-            endpoint: `/api/orders/${realOfflineId}/delivery/status`,
-            method: 'PUT',
-            data: { deliveryStatus: 'delivered' },
-            offlineId: realOfflineId
-          });
-          
+          // Only queue mark_as_paid, do NOT auto-complete
+
+
           // Update local state immediately and move to completed tab (no page refresh)
           const updatedOrder = { ...order, ...updatedData };
           setPendingOrders(prev => prev.filter(o => o.id !== order.id));
@@ -682,7 +654,7 @@ const DeliveryOrders = () => {
             const exists = prev.find(o => o.id === order.id);
             return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
           });
-          
+
           showSuccess(`Order #${order.order_number || order.id} marked as paid offline. Changes will sync when connection is restored.`);
           closePaymentModal();
           // Only refresh stats, not orders (already updated locally)
@@ -747,11 +719,11 @@ const DeliveryOrders = () => {
       if (!orderIdStr) {
         throw new Error('Invalid order ID');
       }
-      
-      const targetOrder = [...pendingOrders, ...completedOrders].find(o => 
+
+      const targetOrder = [...pendingOrders, ...completedOrders].find(o =>
         String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId
       );
-      
+
       // Update local state immediately for better UX (no page refresh)
       const updateLocalState = () => {
         const isDelivered = newStatus === 'delivered';
@@ -760,7 +732,7 @@ const DeliveryOrders = () => {
         // Otherwise, use newStatus for delivery status too (pending, preparing, ready)
         const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
         const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
-        
+
         const updatedOrder = {
           ...targetOrder,
           orderStatus: isDelivered ? 'completed' : newStatus,
@@ -768,15 +740,15 @@ const DeliveryOrders = () => {
           deliveryStatus: newDeliveryStatus,
           delivery_status: newDeliveryStatus
         };
-        
+
         // Move order between tabs if needed
         // For delivery orders, completed means deliveryStatus is 'delivered'
         const shouldBeCompleted = isDelivered || (newStatus === 'completed') || (newDeliveryStatus === 'delivered');
         const isCurrentlyPending = activeTab === 'pending';
-        
+
         // Helper function to match order IDs
         const matchesOrderId = (o) => String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId;
-        
+
         if (shouldBeCompleted && isCurrentlyPending) {
           // Move from pending to completed
           setPendingOrders(prev => prev.filter(o => !matchesOrderId(o)));
@@ -800,22 +772,22 @@ const DeliveryOrders = () => {
           }
         }
       };
-      
+
       // If offline, save to pending operations queue
       if (!isOnline()) {
         // Extract real order ID (remove OFFLINE- prefix if present)
-        const realOrderId = orderIdStr.startsWith('OFFLINE-') 
+        const realOrderId = orderIdStr.startsWith('OFFLINE-')
           ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
           : orderIdStr;
-        
+
         // Handle delivery status updates
         // CRITICAL: Use the offlineId from the target order to ensure we can find it during sync
         const offlineIdForSync = targetOrder?.offlineId || realOrderId;
-        
+
         // For delivery orders, always update delivery status
         const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
         const isDeliveryStatus = deliveryStatuses.includes(newStatus);
-        
+
         if (isDeliveryStatus) {
           // Update delivery status
           await addPendingOperation({
@@ -825,7 +797,7 @@ const DeliveryOrders = () => {
             data: { deliveryStatus: newStatus },
             offlineId: offlineIdForSync // Store offlineId for sync matching
           });
-          
+
           // Also update order status
           if (newStatus === 'delivered') {
             // If delivered, mark order as completed
@@ -864,13 +836,13 @@ const DeliveryOrders = () => {
             offlineId: offlineIdForSync // Store offlineId for sync matching
           });
         }
-        
+
         // Also update local offline order if it exists - CRITICAL: Update with offlineId
         if (targetOrder?.offline) {
           // For delivery orders, update both order_status and delivery_status
           const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
           const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
-          
+
           await updateOfflineOrder(offlineIdForSync, {
             order_status: newStatus === 'delivered' ? 'completed' : newStatus,
             orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
@@ -879,7 +851,7 @@ const DeliveryOrders = () => {
             offlineStatusUpdated: true
           });
         }
-        
+
         updateLocalState();
         // Refresh stats and dispatch event to update badges
         await fetchStats();
@@ -889,13 +861,13 @@ const DeliveryOrders = () => {
         isUpdatingStatus.current = false;
         return;
       }
-      
+
       // Online: try API first
       if (targetOrder?.offline) {
         // For delivery orders, update both order_status and delivery_status
         const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
         const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
-        
+
         await updateOfflineOrder(targetOrder.offlineId || orderIdStr, {
           order_status: newStatus === 'delivered' ? 'completed' : newStatus,
           orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
@@ -912,7 +884,7 @@ const DeliveryOrders = () => {
           // For delivery orders, always update delivery status
           const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
           const isDeliveryStatus = deliveryStatuses.includes(newStatus);
-          
+
           if (isDeliveryStatus) {
             // Update delivery status for delivery orders
             await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
@@ -949,17 +921,17 @@ const DeliveryOrders = () => {
           } else {
             setCompletedOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
           }
-          
+
           // If API fails, save to pending operations
           if (!error.response) {
-            const realOrderId = orderIdStr.startsWith('OFFLINE-') 
+            const realOrderId = orderIdStr.startsWith('OFFLINE-')
               ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
               : orderIdStr;
-            
+
             // For delivery orders, always update delivery status
             const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
             const isDeliveryStatus = deliveryStatuses.includes(newStatus);
-            
+
             if (isDeliveryStatus) {
               // Update delivery status
               await addPendingOperation({
@@ -968,7 +940,7 @@ const DeliveryOrders = () => {
                 method: 'PUT',
                 data: { deliveryStatus: newStatus }
               });
-              
+
               // Also update order status
               if (newStatus === 'delivered') {
                 await addPendingOperation({
@@ -1026,7 +998,7 @@ const DeliveryOrders = () => {
         setCancellingOrderId(orderId);
         try {
           const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
-          
+
           // Update local state immediately (no page refresh)
           const updatedOrder = {
             ...targetOrder,
@@ -1034,14 +1006,14 @@ const DeliveryOrders = () => {
             orderStatus: 'cancelled',
             status: 'cancelled'
           };
-          
+
           // Remove from both lists
           setPendingOrders(prev => prev.filter(o => o.id !== orderId));
           setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
-          
+
           await ordersAPI.cancelOrder(orderId);
           showSuccess('Order cancelled successfully');
-          
+
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
         } catch (err) {
@@ -1067,9 +1039,9 @@ const DeliveryOrders = () => {
         setMarkingPaidId(orderId);
         try {
           const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
-          
+
           await ordersAPI.revertPaymentStatus(orderId);
-          
+
           // Update local state immediately (no page refresh)
           const updatedOrder = {
             ...targetOrder,
@@ -1078,14 +1050,14 @@ const DeliveryOrders = () => {
             amount_taken: null,
             return_amount: null
           };
-          
+
           // Move from completed to pending tab if needed
           setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
           setPendingOrders(prev => {
             const exists = prev.find(o => o.id === orderId);
             return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
           });
-          
+
           showSuccess('Payment status reverted to pending successfully');
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
@@ -1539,10 +1511,10 @@ const DeliveryOrders = () => {
                         // Try to get notes and Google Maps link from order first, then fallback to customer's address
                         let notes = order.deliveryNotes || order.delivery_notes || '';
                         let googleLink = order.googleMapsLink || order.google_maps_link || '';
-                        
+
                         // If order doesn't have notes/googleLink, try to get from customer's address
                         if ((!notes || !googleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
-                          const matchingAddress = order.customer.addresses.find(addr => 
+                          const matchingAddress = order.customer.addresses.find(addr =>
                             addr.address === address || addr.address?.toLowerCase() === address?.toLowerCase()
                           );
                           if (matchingAddress) {
@@ -1550,17 +1522,17 @@ const DeliveryOrders = () => {
                             if (!googleLink && matchingAddress.googleMapsLink) googleLink = matchingAddress.googleMapsLink;
                           }
                         }
-                        
+
                         const copyContainerId = `copy-container-${order.id || order.order_number || Math.random()}`;
-                        
+
                         const handleCopy = async () => {
                           // Get fresh values from order object to ensure we have the latest data
                           let currentNotes = order.deliveryNotes || order.delivery_notes || order.notes || '';
                           let currentGoogleLink = order.googleMapsLink || order.google_maps_link || '';
-                          
+
                           // Fallback to customer's address if order doesn't have it
                           if ((!currentNotes || !currentGoogleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
-                            const matchingAddress = order.customer.addresses.find(addr => 
+                            const matchingAddress = order.customer.addresses.find(addr =>
                               addr.address === address || addr.address?.toLowerCase() === address?.toLowerCase()
                             );
                             if (matchingAddress) {
@@ -1568,7 +1540,7 @@ const DeliveryOrders = () => {
                               if (!currentGoogleLink && matchingAddress.googleMapsLink) currentGoogleLink = matchingAddress.googleMapsLink;
                             }
                           }
-                          
+
                           let copyText = '';
                           if (phone) copyText += `Phone: ${phone}`;
                           if (address) {
@@ -1583,7 +1555,7 @@ const DeliveryOrders = () => {
                             if (copyText) copyText += '\n\n';
                             copyText += `Google Maps: ${currentGoogleLink}`;
                           }
-                          
+
                           try {
                             await navigator.clipboard.writeText(copyText);
                             showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
@@ -1598,40 +1570,40 @@ const DeliveryOrders = () => {
                             showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
                           }
                         };
-                        
+
                         return (
-                          <div 
+                          <div
                             id={copyContainerId}
                             style={{ position: 'relative' }}
-                                    onMouseEnter={(e) => {
-                                      const container = e.currentTarget;
-                                      const phoneEl = container.querySelector('.copy-highlight-phone');
-                                      const addressEl = container.querySelector('.copy-highlight-address');
-                                      if (phoneEl) {
-                                        phoneEl.style.backgroundColor = '#fff3cd';
-                                      }
-                                      if (addressEl) {
-                                        addressEl.style.backgroundColor = '#fff3cd';
-                                      }
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      const container = e.currentTarget;
-                                      const phoneEl = container.querySelector('.copy-highlight-phone');
-                                      const addressEl = container.querySelector('.copy-highlight-address');
-                                      if (phoneEl) {
-                                        phoneEl.style.backgroundColor = 'transparent';
-                                      }
-                                      if (addressEl) {
-                                        addressEl.style.backgroundColor = 'transparent';
-                                      }
-                                    }}
+                            onMouseEnter={(e) => {
+                              const container = e.currentTarget;
+                              const phoneEl = container.querySelector('.copy-highlight-phone');
+                              const addressEl = container.querySelector('.copy-highlight-address');
+                              if (phoneEl) {
+                                phoneEl.style.backgroundColor = '#fff3cd';
+                              }
+                              if (addressEl) {
+                                addressEl.style.backgroundColor = '#fff3cd';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              const container = e.currentTarget;
+                              const phoneEl = container.querySelector('.copy-highlight-phone');
+                              const addressEl = container.querySelector('.copy-highlight-address');
+                              if (phoneEl) {
+                                phoneEl.style.backgroundColor = 'transparent';
+                              }
+                              if (addressEl) {
+                                addressEl.style.backgroundColor = 'transparent';
+                              }
+                            }}
                           >
                             {phone && (
-                              <p 
+                              <p
                                 className="copy-highlight-phone"
-                                style={{ 
-                                  margin: '0.25rem 0', 
-                                  fontSize: '0.85rem', 
+                                style={{
+                                  margin: '0.25rem 0',
+                                  fontSize: '0.85rem',
                                   color: '#6c757d',
                                   padding: '0.25rem',
                                   borderRadius: '4px',
@@ -1643,12 +1615,12 @@ const DeliveryOrders = () => {
                             )}
                             {address && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.25rem 0' }}>
-                                <p 
+                                <p
                                   className="copy-highlight-address"
-                                  style={{ 
-                                    margin: 0, 
-                                    fontSize: '0.85rem', 
-                                    color: '#6c757d', 
+                                  style={{
+                                    margin: 0,
+                                    fontSize: '0.85rem',
+                                    color: '#6c757d',
                                     flex: 1,
                                     padding: '0.25rem',
                                     borderRadius: '4px',
@@ -1685,9 +1657,9 @@ const DeliveryOrders = () => {
                             {googleLink && (
                               <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
                                 <strong>Google Maps:</strong>{' '}
-                                <a 
-                                  href={googleLink} 
-                                  target="_blank" 
+                                <a
+                                  href={googleLink}
+                                  target="_blank"
                                   rel="noopener noreferrer"
                                   style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                                 >
@@ -1702,19 +1674,35 @@ const DeliveryOrders = () => {
                   )}
                   {/* Status Badges */}
                   <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                    {order.order_status && (
-                      <div style={{
-                        padding: '0.25rem 0.75rem',
-                        borderRadius: '20px',
-                        background: getOrderStatusColor(order.order_status).background,
-                        color: getOrderStatusColor(order.order_status).color,
-                        fontSize: '0.8rem',
-                        fontWeight: '600',
-                        textTransform: 'capitalize'
-                      }}>
-                        Order: {(order.orderStatus || order.order_status).replace(/_/g, ' ')}
-                      </div>
-                    )}
+                    {(() => {
+                      const orderStatus = order.orderStatus || order.order_status;
+                      const deliveryStatus = order.deliveryStatus || order.delivery_status;
+
+                      // User requirement: "only show completed if status is delivered or out for delivery"
+                      // If orderStatus claims "completed" but deliveryStatus is NOT completed/delivered,
+                      // fallback to showing delivery status (e.g. Preparing, Ready)
+                      let displayStatus = orderStatus;
+
+                      if (orderStatus === 'completed') {
+                        if (deliveryStatus && deliveryStatus !== 'delivered' && deliveryStatus !== 'out_for_delivery') {
+                          displayStatus = deliveryStatus;
+                        }
+                      }
+
+                      return displayStatus ? (
+                        <div style={{
+                          padding: '0.25rem 0.75rem',
+                          borderRadius: '20px',
+                          background: getOrderStatusColor(displayStatus).background,
+                          color: getOrderStatusColor(displayStatus).color,
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          textTransform: 'capitalize'
+                        }}>
+                          Order: {displayStatus.replace(/_/g, ' ')}
+                        </div>
+                      ) : null;
+                    })()}
                     {order.delivery_status && (
                       <div style={{
                         padding: '0.25rem 0.75rem',
@@ -1802,9 +1790,9 @@ const DeliveryOrders = () => {
                     {order.googleMapsLink || order.google_maps_link ? (
                       <div>
                         <strong>Google Maps:</strong>{' '}
-                        <a 
-                          href={order.googleMapsLink || order.google_maps_link} 
-                          target="_blank" 
+                        <a
+                          href={order.googleMapsLink || order.google_maps_link}
+                          target="_blank"
                           rel="noopener noreferrer"
                           style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                         >
@@ -1866,7 +1854,7 @@ const DeliveryOrders = () => {
                       <option value="delivered">✅ Delivered</option>
                     </select>
                   </div>
-                  
+
                   {/* Offline Status Label - Show when status was updated offline */}
                   {((order.offline && (order.orderStatus || order.order_status)) || order.offlineStatusUpdated) && (
                     <div style={{
@@ -1895,8 +1883,8 @@ const DeliveryOrders = () => {
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button
                       onClick={() => {
-                        sessionStorage.setItem('orderToEdit', JSON.stringify({ 
-                          id: order.id, 
+                        sessionStorage.setItem('orderToEdit', JSON.stringify({
+                          id: order.id,
                           orderType: 'delivery',
                           offline: order.offline || false,
                           offlineId: order.offlineId || null

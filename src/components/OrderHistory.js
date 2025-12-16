@@ -315,22 +315,22 @@ const OrderHistory = () => {
       }, 0);
 
       const deliveryCharge = parseFloat(fullOrder.delivery_charge || 0);
-      
+
       // Get discount percentage from order - check multiple possible field names
       let discountPercent = parseFloat(
-        fullOrder.discount_percent || 
-        fullOrder.discountPercent || 
+        fullOrder.discount_percent ||
+        fullOrder.discountPercent ||
         fullOrder.discount_percentage ||
-        order.discount_percent || 
-        order.discountPercent || 
+        order.discount_percent ||
+        order.discountPercent ||
         order.discount_percentage ||
         0
       );
-      
+
       // If discount_percent is not available but total_amount suggests a discount, calculate it
       const apiTotalAmount = parseFloat(fullOrder.total_amount || fullOrder.totalAmount || 0);
       const expectedTotalWithoutDiscount = subtotal + deliveryCharge;
-      
+
       if (discountPercent === 0 && apiTotalAmount > 0 && apiTotalAmount < expectedTotalWithoutDiscount) {
         // Calculate discount percentage from the difference
         const actualDiscount = expectedTotalWithoutDiscount - apiTotalAmount;
@@ -338,11 +338,11 @@ const OrderHistory = () => {
           discountPercent = (actualDiscount / subtotal) * 100;
         }
       }
-      
+
       // Calculate discount amount and subtotal after discount
       const discountAmount = discountPercent > 0 ? (subtotal * discountPercent / 100) : 0;
       const subtotalAfterDiscount = subtotal - discountAmount;
-      
+
       // Recalculate total amount: subtotal after discount + delivery charge
       // Use API total_amount only if it matches our calculation (within 1 PKR tolerance)
       const calculatedTotal = subtotalAfterDiscount + deliveryCharge;
@@ -383,7 +383,7 @@ const OrderHistory = () => {
       const customer = fullOrder.customer || null;
       const customerName = customer?.name || fullOrder.customer_name || order.customer_name || null;
       const customerPhone = customer?.phone || fullOrder.customer_phone || order.customer_phone || null;
-      
+
       // Extract delivery address - check both camelCase and snake_case
       const deliveryAddress = fullOrder.deliveryAddress || fullOrder.delivery_address || order.delivery_address || order.deliveryAddress || null;
       const deliveryNotes = fullOrder.deliveryNotes || fullOrder.delivery_notes || order.delivery_notes || order.deliveryNotes || null;
@@ -1255,14 +1255,14 @@ const OrderHistory = () => {
                         {(() => {
                           const orderType = order.orderType || order.order_type;
                           if (orderType !== 'delivery') return null;
-                          
+
                           const customer = order.customer;
                           const customerName = customer?.name || order.customer_name || order.customerName;
                           const customerPhone = customer?.phone || order.customer_phone || order.customerPhone;
                           const deliveryAddress = order.delivery_address || order.deliveryAddress;
-                          
+
                           if (!customerName && !customerPhone && !deliveryAddress) return null;
-                          
+
                           return (
                             <>
                               {customerName && (
@@ -1275,10 +1275,10 @@ const OrderHistory = () => {
                                 // Try to get notes and Google Maps link from order first, then fallback to customer's address
                                 let notes = order.deliveryNotes || order.delivery_notes || order.notes || '';
                                 let googleLink = order.googleMapsLink || order.google_maps_link || '';
-                                
+
                                 // If order doesn't have notes/googleLink, try to get from customer's address
                                 if ((!notes || !googleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
-                                  const matchingAddress = order.customer.addresses.find(addr => 
+                                  const matchingAddress = order.customer.addresses.find(addr =>
                                     addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
                                   );
                                   if (matchingAddress) {
@@ -1286,17 +1286,17 @@ const OrderHistory = () => {
                                     if (!googleLink && matchingAddress.googleMapsLink) googleLink = matchingAddress.googleMapsLink;
                                   }
                                 }
-                                
+
                                 const copyContainerId = `copy-container-${order.id || order.order_number || Math.random()}`;
-                                
+
                                 const handleCopy = async () => {
                                   // Get fresh values from order object to ensure we have the latest data
                                   let currentNotes = order.deliveryNotes || order.delivery_notes || order.notes || '';
                                   let currentGoogleLink = order.googleMapsLink || order.google_maps_link || '';
-                                  
+
                                   // Fallback to customer's address if order doesn't have it
                                   if ((!currentNotes || !currentGoogleLink) && order.customer?.addresses && Array.isArray(order.customer.addresses)) {
-                                    const matchingAddress = order.customer.addresses.find(addr => 
+                                    const matchingAddress = order.customer.addresses.find(addr =>
                                       addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
                                     );
                                     if (matchingAddress) {
@@ -1304,7 +1304,7 @@ const OrderHistory = () => {
                                       if (!currentGoogleLink && matchingAddress.googleMapsLink) currentGoogleLink = matchingAddress.googleMapsLink;
                                     }
                                   }
-                                  
+
                                   let copyText = '';
                                   if (customerPhone) copyText += `Phone: ${customerPhone}`;
                                   if (deliveryAddress) {
@@ -1319,7 +1319,7 @@ const OrderHistory = () => {
                                     if (copyText) copyText += '\n\n';
                                     copyText += `Google Maps: ${currentGoogleLink}`;
                                   }
-                                  
+
                                   try {
                                     await navigator.clipboard.writeText(copyText);
                                     showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
@@ -1334,9 +1334,9 @@ const OrderHistory = () => {
                                     showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
                                   }
                                 };
-                                
+
                                 return (
-                                  <div 
+                                  <div
                                     id={copyContainerId}
                                     style={{ position: 'relative' }}
                                     onMouseEnter={(e) => {
@@ -1363,11 +1363,11 @@ const OrderHistory = () => {
                                     }}
                                   >
                                     {customerPhone && (
-                                      <p 
+                                      <p
                                         className="copy-highlight-phone"
-                                        style={{ 
-                                          margin: '0.25rem 0', 
-                                          fontSize: '0.85rem', 
+                                        style={{
+                                          margin: '0.25rem 0',
+                                          fontSize: '0.85rem',
                                           color: '#6c757d',
                                           padding: '0.25rem',
                                           borderRadius: '4px',
@@ -1379,12 +1379,12 @@ const OrderHistory = () => {
                                     )}
                                     {deliveryAddress && (
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.25rem 0' }}>
-                                        <p 
+                                        <p
                                           className="copy-highlight-address"
-                                          style={{ 
-                                            margin: 0, 
-                                            fontSize: '0.85rem', 
-                                            color: '#6c757d', 
+                                          style={{
+                                            margin: 0,
+                                            fontSize: '0.85rem',
+                                            color: '#6c757d',
                                             flex: 1,
                                             padding: '0.25rem',
                                             borderRadius: '4px',
@@ -1421,9 +1421,9 @@ const OrderHistory = () => {
                                     {googleLink && (
                                       <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
                                         <strong>Google Maps:</strong>{' '}
-                                        <a 
-                                          href={googleLink} 
-                                          target="_blank" 
+                                        <a
+                                          href={googleLink}
+                                          target="_blank"
                                           rel="noopener noreferrer"
                                           style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                                         >
@@ -1448,12 +1448,12 @@ const OrderHistory = () => {
                         const orderType = order.order_type || order.orderType;
                         const paymentStatus = order.payment_status || order.paymentStatus;
                         let displayOrderStatus = order.order_status || order.orderStatus;
-                        
+
                         // If payment is completed and order is dine-in, ensure status shows as completed
                         if (orderType === 'dine_in' && paymentStatus === 'completed') {
                           displayOrderStatus = 'completed';
                         }
-                        
+
                         return displayOrderStatus ? (
                           <div style={{
                             padding: '0.25rem 0.75rem',
@@ -1510,6 +1510,30 @@ const OrderHistory = () => {
                         {(order.payment_method || order.paymentMethod) === 'cash' ? '💵 Cash' : '🏦 Bank Transfer'}
                       </div>
                     )}
+                    {/* Display return amount if not zero */}
+                    {(() => {
+                      const returnAmt = order.return_amount || order.returnAmount || 0;
+                      if (returnAmt !== 0) {
+                        const isNegative = returnAmt < 0;
+                        return (
+                          <div style={{
+                            marginTop: '0.5rem',
+                            padding: '0.4rem 0.75rem',
+                            borderRadius: '6px',
+                            background: isNegative ? '#fee2e2' : '#d1fae5',
+                            border: `1px solid ${isNegative ? '#dc2626' : '#10b981'}`,
+                            color: isNegative ? '#dc2626' : '#10b981',
+                            fontSize: '0.8rem',
+                            fontWeight: '600',
+                            display: 'inline-block'
+                          }}>
+                            {isNegative ? '⚠️ Restaurant Owed: ' : '💰 Change Given: '}
+                            {formatCurrency(Math.abs(returnAmt))}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
                 </div>
 
@@ -1607,7 +1631,7 @@ const OrderHistory = () => {
                     {(() => {
                       const orderType = orderDetails.order.orderType || orderDetails.order.order_type;
                       if (orderType !== 'delivery') return null;
-                      
+
                       const customer = orderDetails.order.customer;
                       const customerName = customer?.name || orderDetails.order.customer_name || orderDetails.order.customerName;
                       const customerPhone = customer?.phone || orderDetails.order.customer_phone || orderDetails.order.customerPhone;
@@ -1616,10 +1640,10 @@ const OrderHistory = () => {
                       const deliveryCharge = orderDetails.order.deliveryCharge || orderDetails.order.delivery_charge || 0;
                       const deliveryStatus = orderDetails.order.deliveryStatus || orderDetails.order.delivery_status;
                       let googleMapsLink = orderDetails.order.googleMapsLink || orderDetails.order.google_maps_link;
-                      
+
                       // If order doesn't have notes/googleLink, try to get from customer's address
                       if ((!deliveryNotes || !googleMapsLink) && orderDetails.order.customer?.addresses && Array.isArray(orderDetails.order.customer.addresses)) {
-                        const matchingAddress = orderDetails.order.customer.addresses.find(addr => 
+                        const matchingAddress = orderDetails.order.customer.addresses.find(addr =>
                           addr.address === deliveryAddress || addr.address?.toLowerCase() === deliveryAddress?.toLowerCase()
                         );
                         if (matchingAddress) {
@@ -1627,7 +1651,7 @@ const OrderHistory = () => {
                           if (!googleMapsLink && matchingAddress.googleMapsLink) googleMapsLink = matchingAddress.googleMapsLink;
                         }
                       }
-                      
+
                       return (
                         <div style={{ marginBottom: '1rem' }}>
                           <strong>Customer & Delivery Information:</strong>
@@ -1637,7 +1661,7 @@ const OrderHistory = () => {
                               // Use the already computed googleMapsLink (which includes fallback from customer address)
                               const googleLink = googleMapsLink || '';
                               const copyContainerId = `copy-container-details-${orderDetails.order.id || orderDetails.order.order_number || Math.random()}`;
-                              
+
                               const handleCopy = async () => {
                                 // Use the already computed deliveryNotes and googleMapsLink (which includes fallback from customer address)
                                 let copyText = '';
@@ -1654,7 +1678,7 @@ const OrderHistory = () => {
                                   if (copyText) copyText += '\n\n';
                                   copyText += `Google Maps: ${googleMapsLink}`;
                                 }
-                                
+
                                 try {
                                   await navigator.clipboard.writeText(copyText);
                                   showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
@@ -1669,9 +1693,9 @@ const OrderHistory = () => {
                                   showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
                                 }
                               };
-                              
+
                               return (
-                                <div 
+                                <div
                                   id={copyContainerId}
                                   style={{ position: 'relative' }}
                                   onMouseEnter={(e) => {
@@ -1747,9 +1771,9 @@ const OrderHistory = () => {
                                   {googleMapsLink && (
                                     <div style={{ marginTop: '0.5rem' }}>
                                       <strong>Google Maps:</strong>{' '}
-                                      <a 
-                                        href={googleMapsLink} 
-                                        target="_blank" 
+                                      <a
+                                        href={googleMapsLink}
+                                        target="_blank"
                                         rel="noopener noreferrer"
                                         style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                                       >
@@ -1811,7 +1835,7 @@ const OrderHistory = () => {
                             0;
                           const calculatedTotal = (subtotalAmount - discountAmount) + Number(deliveryCharge || 0);
                           const displayTotal = totalAmount || calculatedTotal;
-                          
+
                           return (
                             <>
                               <div>Payment Method: {paymentMethod === 'cash' ? '💵 Cash' : '🏦 Bank Transfer'}</div>
