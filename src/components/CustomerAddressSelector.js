@@ -226,7 +226,7 @@ const CustomerAddressSelector = ({
       }
     } catch (err) {
       console.error('Failed to add address:', err);
-      const errorMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to add address';
+      const errorMsg = err.formattedMessage || err.response?.data?.error || err.response?.data?.message || 'Failed to add address';
       showError(errorMsg);
     } finally {
       setAdding(false);
@@ -306,9 +306,9 @@ const CustomerAddressSelector = ({
                   {selectedAddrObj.googleMapsLink && (
                     <div style={{ color: '#6c757d', marginTop: '0.25rem' }}>
                       <strong>Google Maps:</strong>{' '}
-                      <a 
-                        href={selectedAddrObj.googleMapsLink} 
-                        target="_blank" 
+                      <a
+                        href={selectedAddrObj.googleMapsLink}
+                        target="_blank"
                         rel="noopener noreferrer"
                         style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                       >

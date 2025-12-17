@@ -32,7 +32,11 @@ const ExpenseManagement = () => {
       showSuccess('Expense added successfully!');
     } catch (error) {
       console.error('Error adding expense:', error);
-      showError('Error adding expense. Please try again.');
+      const errorMessage = error.formattedMessage ||
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        'Error adding expense. Please try again.';
+      showError(errorMessage);
     }
   };
 

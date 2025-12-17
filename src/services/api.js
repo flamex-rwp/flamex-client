@@ -95,12 +95,12 @@ api.interceptors.response.use(
     // For GET requests when offline or network error, try to return cached data
     // Check for network errors: no response object, or network error code, or offline
     // Check if it's a network error (not a server validation error)
-    const isNetworkError = !error.response || 
-                          error.code === 'ERR_NETWORK' || 
-                          error.message === 'Network Error';
-    
+    const isNetworkError = !error.response ||
+      error.code === 'ERR_NETWORK' ||
+      error.message === 'Network Error';
+
     let hasCachedData = false;
-    
+
     if (method === 'GET' && error.config?._shouldCheckCache && isNetworkError && !error.config?.disableCacheFallback) {
       try {
         const params = error.config.params || {};
@@ -119,12 +119,12 @@ api.interceptors.response.use(
         if (!normalizedUrl.startsWith('/')) {
           normalizedUrl = '/' + normalizedUrl;
         }
-        
+
         // Build full URL with query params for cache lookup
-        const fullUrl = normalizedUrl.includes('?') 
-          ? normalizedUrl 
+        const fullUrl = normalizedUrl.includes('?')
+          ? normalizedUrl
           : normalizedUrl + (Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : '');
-        
+
         const cachedResponse = await getCachedAPIResponse(fullUrl, method, params);
         if (cachedResponse) {
           console.log(`📦 Serving from cache (${!isOnline() ? 'offline' : 'network error'}): ${fullUrl}`);
@@ -146,6 +146,9 @@ api.interceptors.response.use(
       }
     }
 
+    // Attach formatted message to error object for easier consumption
+    error.formattedMessage = errorMsg;
+
     console.error(`🔴 API Error: ${method} ${url} [${status}]`, {
       message: errorMsg,
       data: error.response?.data,
@@ -162,11 +165,11 @@ api.interceptors.response.use(
     const isServerError = error.response?.status >= 500;
     const isAuthEndpoint = url.includes('/api/auth/');
     const shouldShowModal = isAuthEndpoint && ((isNetworkError && !hasCachedData) || isServerError);
-    
+
     // #region agent log
     // Debug telemetry removed - was causing ERR_CONNECTION_REFUSED errors
     // #endregion
-    
+
     if (shouldShowModal) {
       serverErrorService.triggerError(error);
     }

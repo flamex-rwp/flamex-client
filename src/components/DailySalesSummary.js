@@ -196,9 +196,9 @@ const DailySalesSummary = () => {
     filteredExpenses = filteredExpenses.filter(e => {
       const expenseDateStr = e.expenseDate || e.expense_date || e.createdAt || e.created_at;
       if (!expenseDateStr) return false;
-      
+
       const expenseDate = dayjs(expenseDateStr);
-      
+
       if (dateRange === 'today') {
         return expenseDate.format('YYYY-MM-DD') === dayjs().format('YYYY-MM-DD');
       } else if (dateRange === 'yesterday') {
@@ -279,14 +279,14 @@ const DailySalesSummary = () => {
       // Handle orders data - Use the correct response structure
       // Axios returns the response in .data, and our API wraps response in success/data envelope
       const ordersPayload = ordersResponse.data;
-      
+
       if (ordersPayload && ordersPayload.success && ordersPayload.data) {
         // API response format: { success: true, data: { orders: [...], total: ..., page: ... } }
         const ordersData = ordersPayload.data.orders || [];
-        
+
         // Ensure we have an array
         const ordersArray = Array.isArray(ordersData) ? ordersData : [];
-        
+
         // Backend should already filter by date correctly, but keep minimal client-side validation
         const filteredOrders = ordersArray.filter(order => {
           if (!params.startDate || !params.endDate) return true;
@@ -298,7 +298,7 @@ const DailySalesSummary = () => {
           const isBeforeEnd = orderDate.isBefore(end) || orderDate.isSame(end, 'day');
           return isAfterStart && isBeforeEnd;
         });
-        
+
         setOrders(filteredOrders);
 
         // Calculate stats from orders
@@ -321,10 +321,10 @@ const DailySalesSummary = () => {
       if (expensesPayload && (expensesPayload.success || Array.isArray(expensesPayload))) {
         // Extract expenses from response
         const expensesData = expensesPayload.data?.expenses || expensesPayload.data || expensesPayload.expenses || [];
-        
+
         // Ensure we have an array
         const expensesArray = Array.isArray(expensesData) ? expensesData : [];
-        
+
         setExpensesList(expensesArray);
 
         const calculatedExpenses = calculateExpenses(expensesArray, dateFilter);
@@ -337,11 +337,11 @@ const DailySalesSummary = () => {
       }
     } catch (err) {
       console.error('Failed to load summary data', err);
-      
+
       // For network errors, don't show error toast - cache will handle it
       // Only show error for actual API errors (4xx, 5xx)
       if (err.response) {
-        const errorMessage = err.response?.data?.error || err.message || 'Failed to load summary data';
+        const errorMessage = err.formattedMessage || err.response?.data?.error || err.message || 'Failed to load summary data';
         setError(errorMessage);
         // Only show error toast for non-network errors (4xx, 5xx)
         if (err.response.status >= 400 && err.response.status < 500) {
@@ -372,7 +372,7 @@ const DailySalesSummary = () => {
       isLocalhost: API_BASE_URL.includes('localhost'),
       isDeployed: !API_BASE_URL.includes('localhost')
     });
-    
+
     fetchData();
   }, [fetchData]);
 
@@ -608,7 +608,7 @@ const DailySalesSummary = () => {
       doc.save(filename);
     } catch (error) {
       console.error('Failed to generate PDF:', error);
-      showError('Failed to export PDF. Please try again.');
+      showError(error.formattedMessage || error.message || 'Failed to export PDF. Please try again.');
     }
   };
 

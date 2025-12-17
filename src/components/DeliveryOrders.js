@@ -658,7 +658,7 @@ const DeliveryOrders = () => {
           showError('Failed to save offline. Please try again.');
         }
       } else {
-        showError(err.response?.data?.error || 'Failed to mark order as paid');
+        showError(err.formattedMessage || err.response?.data?.error || 'Failed to mark order as paid');
       }
     } finally {
       setMarkingPaidId(null);
@@ -975,7 +975,7 @@ const DeliveryOrders = () => {
       }
     } catch (err) {
       console.error('Failed to update order status', err);
-      showError(err.response?.data?.error || 'Failed to update order status');
+      showError(err.formattedMessage || err.response?.data?.error || 'Failed to update order status');
     } finally {
       setUpdatingStatusId(null);
       isUpdatingStatus.current = false;
@@ -1011,7 +1011,7 @@ const DeliveryOrders = () => {
           fetchStats();
         } catch (err) {
           console.error('Failed to cancel order', err);
-          showError(err.response?.data?.error || 'Failed to cancel order');
+          showError(err.formattedMessage || err.response?.data?.error || 'Failed to cancel order');
           // Revert local state on error
           await fetchAllOrders();
         } finally {
@@ -1056,7 +1056,7 @@ const DeliveryOrders = () => {
           fetchStats();
         } catch (err) {
           console.error('Failed to revert payment status', err);
-          showError(err.response?.data?.error || 'Failed to revert payment status');
+          showError(err.formattedMessage || err.response?.data?.error || 'Failed to revert payment status');
           // Revert local state on error
           await fetchAllOrders();
         } finally {

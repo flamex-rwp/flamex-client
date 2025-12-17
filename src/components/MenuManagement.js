@@ -60,7 +60,11 @@ const MenuManagement = () => {
       resetForm();
     } catch (error) {
       console.error('Error saving menu item:', error);
-      showError('Failed to save menu item. Please try again.');
+      const errorMessage = error.formattedMessage ||
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        'Failed to save menu item. Please try again.';
+      showError(errorMessage);
     }
   };
 
@@ -87,7 +91,11 @@ const MenuManagement = () => {
           fetchMenuItems();
         } catch (error) {
           console.error('Error deleting menu item:', error);
-          showError('Failed to delete menu item. Please try again.');
+          const errorMessage = error.formattedMessage ||
+            error.response?.data?.message ||
+            error.response?.data?.error ||
+            'Failed to delete menu item. Please try again.';
+          showError(errorMessage);
         }
       },
       variant: 'danger'
@@ -191,7 +199,7 @@ const MenuManagement = () => {
       <ConfirmationModal
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-        onConfirm={confirmModal.onConfirm || (() => {})}
+        onConfirm={confirmModal.onConfirm || (() => { })}
         title={confirmModal.title}
         message={confirmModal.message}
         variant={confirmModal.variant}

@@ -41,7 +41,11 @@ const CategoryManagement = () => {
       setShowForm(false);
     } catch (error) {
       console.error('Error creating category:', error);
-      showError('Failed to create category. Please try again.');
+      const errorMessage = error.formattedMessage ||
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        'Failed to create category. Please try again.';
+      showError(errorMessage);
     }
   };
 
@@ -57,7 +61,11 @@ const CategoryManagement = () => {
           fetchCategories();
         } catch (error) {
           console.error('Error deleting category:', error);
-          showError('Failed to delete category. Please try again.');
+          const errorMessage = error.formattedMessage ||
+            error.response?.data?.message ||
+            error.response?.data?.error ||
+            'Failed to delete category. Please try again.';
+          showError(errorMessage);
         }
       },
       variant: 'danger'
@@ -90,9 +98,9 @@ const CategoryManagement = () => {
             <button type="submit" className="btn btn-success">
               Add Category
             </button>
-            <button 
-              type="button" 
-              className="btn btn-secondary" 
+            <button
+              type="button"
+              className="btn btn-secondary"
               onClick={() => {
                 setShowForm(false);
                 setCategoryName('');
@@ -111,8 +119,8 @@ const CategoryManagement = () => {
             <div key={category.id} className="menu-item">
               <h3>{category.name}</h3>
               <p>Created: {new Date(category.created_at).toLocaleDateString()}</p>
-              <button 
-                className="btn btn-danger" 
+              <button
+                className="btn btn-danger"
                 onClick={() => handleDelete(category.id)}
               >
                 Delete
@@ -126,7 +134,7 @@ const CategoryManagement = () => {
       <ConfirmationModal
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
-        onConfirm={confirmModal.onConfirm || (() => {})}
+        onConfirm={confirmModal.onConfirm || (() => { })}
         title={confirmModal.title}
         message={confirmModal.message}
         variant={confirmModal.variant}

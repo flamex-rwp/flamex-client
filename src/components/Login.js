@@ -40,7 +40,7 @@ const Login = ({ onLoginSuccess }) => {
     } catch (err) {
       console.error('Login error:', err);
       // improved error handling
-      const errorMessage = err.response?.data?.message || err.response?.data?.error || 'Login failed. Please check your credentials.';
+      const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Login failed. Please check your credentials.';
       setError(errorMessage);
     } finally {
       setLoading(false);

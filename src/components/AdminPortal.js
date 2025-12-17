@@ -182,7 +182,8 @@ const AdminPortal = ({ user, onLogout }) => {
     } catch (err) {
       console.error('Error fetching users:', err);
       setUsers([]);
-      showError('Error fetching users: ' + (err.response?.data?.error || err.message));
+      // Use formatted message from api interceptor
+      showError('Error fetching users: ' + (err.formattedMessage || err.response?.data?.error || err.message));
     }
   };
 
@@ -243,7 +244,7 @@ const AdminPortal = ({ user, onLogout }) => {
       setUserForm({ username: '', password: '', full_name: '', role: 'manager', email: '', phone: '', status: 'active' });
       fetchUsers();
     } catch (err) {
-      showError('Error: ' + (err.response?.data?.error || err.message));
+      showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
     }
   };
 
@@ -258,7 +259,7 @@ const AdminPortal = ({ user, onLogout }) => {
           showSuccess('User deleted successfully');
           fetchUsers();
         } catch (err) {
-          showError('Error: ' + (err.response?.data?.error || err.message));
+          showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
         }
       },
       variant: 'danger'
@@ -295,7 +296,7 @@ const AdminPortal = ({ user, onLogout }) => {
       setCategoryForm({ name: '', description: '' });
       fetchCategories();
     } catch (err) {
-      showError('Error: ' + (err.response?.data?.error || err.message));
+      showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
     }
   };
 
@@ -310,7 +311,7 @@ const AdminPortal = ({ user, onLogout }) => {
           showSuccess('Category deleted successfully');
           fetchCategories();
         } catch (err) {
-          showError('Error: ' + (err.response?.data?.error || err.message));
+          showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
         }
       },
       variant: 'danger'
@@ -423,7 +424,7 @@ const AdminPortal = ({ user, onLogout }) => {
           showSuccess('Menu item deleted successfully');
           fetchMenuItems();
         } catch (err) {
-          showError('Error: ' + (err.response?.data?.error || err.message));
+          showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
         }
       },
       variant: 'danger'

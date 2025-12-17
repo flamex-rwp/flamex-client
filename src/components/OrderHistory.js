@@ -143,7 +143,7 @@ const OrderHistory = () => {
       console.error('Failed to load order history', err);
       // Don't show error for network errors when offline - cache should handle it
       if (err.response) {
-        setError(err.response?.data?.error || 'Failed to load orders');
+        setError(err.formattedMessage || err.response?.data?.error || 'Failed to load orders');
       } else {
         // Network error - cache should have handled it, set empty data gracefully
         setOrders([]);
@@ -232,7 +232,7 @@ const OrderHistory = () => {
       setExpandedOrderId(orderId);
     } catch (err) {
       console.error('Failed to load order details', err);
-      showError('Failed to load order details');
+      showError(err.formattedMessage || err.response?.data?.error || 'Failed to load order details');
     } finally {
       setLoadingDetails(false);
     }
@@ -438,7 +438,7 @@ const OrderHistory = () => {
       showSuccess(`Receipt generated for Order #${fullOrder.order_number || fullOrder.id}`);
     } catch (err) {
       console.error('Failed to generate receipt', err);
-      showError('Failed to generate receipt. Please try again.');
+      showError(err.formattedMessage || err.response?.data?.error || 'Failed to generate receipt. Please try again.');
     } finally {
       setGeneratingReceiptId(null);
     }

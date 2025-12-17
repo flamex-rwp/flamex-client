@@ -88,7 +88,8 @@ const CustomerManagement = () => {
       console.error('Failed to fetch customers:', err);
       // Don't show error for network errors when offline - cache will handle it
       if (err.response) {
-        showError('Failed to load customers: ' + (err.response?.data?.error || err.message));
+        const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Unknown server error';
+        showError('Failed to load customers: ' + errorMessage);
       }
       setCustomers([]);
     } finally {
@@ -169,7 +170,9 @@ const CustomerManagement = () => {
       setAddressSearchQuery('');
       fetchCustomers();
     } catch (err) {
-      showError('Error: ' + (err.response?.data?.error || err.message));
+      console.error('Customer Error:', err);
+      const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Error processing customer';
+      showError(errorMessage);
     }
   };
 
@@ -184,7 +187,9 @@ const CustomerManagement = () => {
           showSuccess('Customer deleted successfully');
           fetchCustomers();
         } catch (err) {
-          showError('Error: ' + (err.response?.data?.error || err.message));
+          console.error('Delete Customer Error:', err);
+          const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Error deleting customer';
+          showError(errorMessage);
         }
       },
       variant: 'danger'

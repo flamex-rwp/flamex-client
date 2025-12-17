@@ -146,7 +146,7 @@ const ExpenseHistory = ({ readOnly = false }) => {
           fetchExpenses();
         } catch (error) {
           console.error('Error deleting expense:', error);
-          showError('Failed to delete expense. Please try again.');
+          showError(error.formattedMessage || error.response?.data?.error || 'Failed to delete expense. Please try again.');
         }
       },
       variant: 'danger'
@@ -218,7 +218,7 @@ const ExpenseHistory = ({ readOnly = false }) => {
       await fetchExpenses();
     } catch (error) {
       console.error('Error adding expense:', error);
-      const errorMsg = error.response?.data?.message || error.response?.data?.error || 'Failed to add expense. Please try again.';
+      const errorMsg = error.formattedMessage || error.response?.data?.error || 'Failed to add expense. Please try again.';
       showError(errorMsg);
     }
   };
@@ -475,7 +475,7 @@ const ExpenseHistory = ({ readOnly = false }) => {
       await fetchExpenses();
     } catch (error) {
       console.error('Error updating expense:', error);
-      const errorMsg = error.response?.data?.message || error.response?.data?.error || 'Failed to update expense. Please try again.';
+      const errorMsg = error.formattedMessage || error.response?.data?.error || 'Failed to update expense. Please try again.';
       showError(errorMsg);
     }
   };

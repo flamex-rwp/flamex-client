@@ -12,6 +12,7 @@ const ServerConnectionModal = ({
   if (!isOpen) return null;
 
   const message =
+    error?.formattedMessage ||
     error?.message ||
     `Cannot connect to the server. Please ensure it is running at ${apiBaseUrl || 'http://localhost:3000'}.`;
 

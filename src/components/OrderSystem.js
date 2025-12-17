@@ -1245,12 +1245,12 @@ const OrderSystem = () => {
                 showInfo('Order update saved offline. It will sync when connection is restored.');
               } catch (offlineError) {
                 console.error('Error saving update offline:', offlineError);
-                const message = error.response?.data?.error || 'Failed to update order. Please try again.';
+                const message = error.formattedMessage || error.response?.data?.error || error.message || 'Failed to update order. Please try again.';
                 setCheckoutError(message);
                 return;
               }
             } else {
-              const message = error.response?.data?.error || 'Failed to update order. Please try again.';
+              const message = error.formattedMessage || error.response?.data?.error || error.message || 'Failed to update order. Please try again.';
               setCheckoutError(message);
               return;
             }
@@ -1470,8 +1470,8 @@ const OrderSystem = () => {
 
     } catch (error) {
       console.error('Error during checkout:', error);
-      showError('Error during checkout. Please try again.');
-      setCheckoutError('An unexpected error occurred. Please try again.');
+      showError(error.formattedMessage || error.message || 'Error during checkout. Please try again.');
+      setCheckoutError(error.formattedMessage || 'An unexpected error occurred. Please try again.');
     }
   };
 

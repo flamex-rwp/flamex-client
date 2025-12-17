@@ -37,26 +37,26 @@ export const isOnline = async () => {
 
   // Perform connectivity check
   serverConnectivityCache.checking = true;
-  
+
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONNECTIVITY_CHECK_TIMEOUT);
-    
+
     const response = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
       signal: controller.signal,
       cache: 'no-cache'
     });
-    
+
     clearTimeout(timeoutId);
-    
+
     const isServerOnline = response.ok || response.status < 500;
     serverConnectivityCache = {
       isOnline: isServerOnline,
       lastCheck: now,
       checking: false
     };
-    
+
     return isServerOnline;
   } catch (error) {
     // Network error or timeout - server is not reachable
@@ -156,7 +156,7 @@ export const syncOfflineOrders = async () => {
           if (serverOrder) {
             await markOrderSynced(order.id, serverOrder);
           } else {
-          await markOrderSynced(order.id);
+            await markOrderSynced(order.id);
           }
           syncedCount++;
           console.log(`Order ${order.id} synced successfully`);
@@ -170,7 +170,7 @@ export const syncOfflineOrders = async () => {
       } catch (error) {
         failedCount++;
         const errorData = error.response?.data || {};
-        const errorMessage = errorData.message || error.message || '';
+        const errorMessage = error.formattedMessage || errorData.message || error.message || '';
 
         // Check if error is "Table already occupied"
         const isTableOccupied = errorMessage.toLowerCase().includes('table') &&
@@ -211,7 +211,7 @@ export const syncOfflineOrders = async () => {
 
         errors.push({
           orderId: order.id,
-          error: errorData.message || error.message,
+          error: error.formattedMessage || errorData.message || error.message,
           details: errorData.errors
         });
       }

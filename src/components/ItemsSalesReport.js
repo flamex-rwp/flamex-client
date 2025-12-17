@@ -46,7 +46,7 @@ const ItemsSalesReport = () => {
       console.error('Failed to load items sales', err);
       // Don't show error toast for network errors when offline - cache will handle it
       if (err.response) {
-        setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load items sales');
+        setError(err.formattedMessage || err.response?.data?.error || 'Failed to load items sales');
       } else {
         // Network error - try to use cached data silently
         setItemsSales([]);
@@ -100,8 +100,8 @@ const ItemsSalesReport = () => {
         itemsMap[itemName].quantity += quantity;
         itemsMap[itemName].total_revenue += revenue;
         // Recalculate average price
-        itemsMap[itemName].price = itemsMap[itemName].quantity > 0 
-          ? itemsMap[itemName].total_revenue / itemsMap[itemName].quantity 
+        itemsMap[itemName].price = itemsMap[itemName].quantity > 0
+          ? itemsMap[itemName].total_revenue / itemsMap[itemName].quantity
           : 0;
       } else {
         itemsMap[itemName] = {

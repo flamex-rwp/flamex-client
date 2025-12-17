@@ -51,7 +51,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       setAddresses(addressList);
     } catch (err) {
       console.error('Failed to load addresses:', err);
-      
+
       // Fallback: use addresses from customer object if available
       if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
         console.log(`[CustomerAddressModal] Using addresses from customer object: ${customer.addresses.length}`);
@@ -133,12 +133,12 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
           console.warn('Failed to cache offline address:', offlineErr);
         }
 
-      setAddresses(prev => [...prev, newAddr]);
-      setNewAddress('');
-      setNewAddressNotes('');
-      setNewGoogleMapsLink('');
-      setIsDefault(false);
-      setShowAddForm(false);
+        setAddresses(prev => [...prev, newAddr]);
+        setNewAddress('');
+        setNewAddressNotes('');
+        setNewGoogleMapsLink('');
+        setIsDefault(false);
+        setShowAddForm(false);
         showSuccess('Address saved offline. It will sync when back online.');
         if (onAddressUpdate) onAddressUpdate();
         return;
@@ -160,13 +160,13 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       setIsDefault(false);
       setShowAddForm(false);
       showSuccess('Address added successfully');
-      
+
       if (onAddressUpdate) {
         onAddressUpdate();
       }
     } catch (err) {
       console.error('Failed to add address:', err);
-      const errorMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to add address';
+      const errorMsg = err.formattedMessage || err.response?.data?.error || err.response?.data?.message || 'Failed to add address';
       showError(errorMsg);
     } finally {
       setAdding(false);
@@ -180,8 +180,8 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       return;
     }
 
-        setDeletingId(addressId);
-        try {
+    setDeletingId(addressId);
+    try {
       const customerIdStr = String(customer.id ?? '');
       const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
 
@@ -211,7 +211,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         if (onAddressUpdate) onAddressUpdate();
       } else {
         console.log('[AddressModal] Online delete starting', { addressId, customerId: customer.id });
-          await customerAPI.deleteAddress(addressId);
+        await customerAPI.deleteAddress(addressId);
         console.log('[AddressModal] Online delete response success', { addressId });
 
         // Update local state immediately
@@ -231,20 +231,20 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         }
 
         // Reload to ensure fresh list from API
-          await loadAddresses();
+        await loadAddresses();
         console.log('[AddressModal] Reloaded addresses after delete');
-          showSuccess('Address deleted successfully');
-          if (onAddressUpdate) {
-            onAddressUpdate();
+        showSuccess('Address deleted successfully');
+        if (onAddressUpdate) {
+          onAddressUpdate();
         }
-          }
-        } catch (err) {
-          console.error('Failed to delete address:', err);
-          showError(err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
-        } finally {
-          setDeletingId(null);
-          setConfirmModal({ ...confirmModal, isOpen: false });
-        }
+      }
+    } catch (err) {
+      console.error('Failed to delete address:', err);
+      showError(err.formattedMessage || err.response?.data?.error || err.response?.data?.message || 'Failed to delete address');
+    } finally {
+      setDeletingId(null);
+      setConfirmModal({ ...confirmModal, isOpen: false });
+    }
   };
 
   const handleSetDefault = async (addressId) => {
@@ -289,7 +289,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       }
     } catch (err) {
       console.error('Failed to set default address:', err);
-      showError(err.response?.data?.error || err.response?.data?.message || 'Failed to update default address');
+      showError(err.formattedMessage || err.response?.data?.error || err.response?.data?.message || 'Failed to update default address');
     }
   };
 
@@ -371,9 +371,9 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                       {defaultAddress.googleMapsLink && (
                         <div style={{ fontSize: '0.9rem', color: '#6c757d', marginTop: '0.25rem' }}>
                           <strong>Google Maps:</strong>{' '}
-                          <a 
-                            href={defaultAddress.googleMapsLink} 
-                            target="_blank" 
+                          <a
+                            href={defaultAddress.googleMapsLink}
+                            target="_blank"
                             rel="noopener noreferrer"
                             style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                           >
@@ -434,9 +434,9 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                             {addr.googleMapsLink && (
                               <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
                                 <strong>Google Maps:</strong>{' '}
-                                <a 
-                                  href={addr.googleMapsLink} 
-                                  target="_blank" 
+                                <a
+                                  href={addr.googleMapsLink}
+                                  target="_blank"
                                   rel="noopener noreferrer"
                                   style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
                                 >

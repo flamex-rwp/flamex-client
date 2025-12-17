@@ -98,7 +98,7 @@ const DeliveryReports = () => {
       }
       console.error('Failed to load overview report', err);
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to load overview report');
-      showError(err.response?.data?.error || err.response?.data?.message || 'Failed to load overview report');
+      showError(err.formattedMessage || err.response?.data?.error || 'Failed to load overview report');
     } finally {
       setLoading(prev => ({ ...prev, overview: false }));
     }
@@ -274,7 +274,7 @@ const DeliveryReports = () => {
     } catch (err) {
       console.error('Failed to mark COD as collected', err);
       setError(err.response?.data?.error || err.response?.data?.message || 'Failed to mark COD as collected');
-      showError(err.response?.data?.error || err.response?.data?.message || 'Failed to mark COD as collected');
+      showError(err.formattedMessage || err.response?.data?.error || 'Failed to mark COD as collected');
     } finally {
       setLoading(prev => ({ ...prev, cod: false }));
     }
