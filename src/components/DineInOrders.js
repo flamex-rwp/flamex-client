@@ -197,11 +197,21 @@ const DineInOrders = () => {
         })
         .filter(Boolean);
 
+      // Filter offline orders by target tab
+      const filteredOfflineOrders = offlineOrders.filter(o => {
+        const isCompleted = o.orderStatus === 'completed' || o.orderStatus === 'cancelled' || o.paymentStatus === 'completed' || o.status === 'completed';
+        if (targetTab === 'pending') {
+          return !isCompleted;
+        } else {
+          return isCompleted;
+        }
+      });
+
       // Merge API and offline orders, remove duplicates by checking order_number and timestamp
       const allOrders = [...apiOrders];
       const apiOrderNumbers = new Set(apiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
 
-      offlineOrders.forEach(offlineOrder => {
+      filteredOfflineOrders.forEach(offlineOrder => {
         // Only check order_number for duplicates, not ID (since offline IDs are unique)
         const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
         const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
@@ -218,7 +228,7 @@ const DineInOrders = () => {
         return dateB - dateA;
       });
 
-      console.log('✅ Orders fetched:', apiOrders.length, 'API orders,', offlineOrders.length, 'offline orders for', targetTab);
+      console.log('✅ Orders fetched:', apiOrders.length, 'API orders,', filteredOfflineOrders.length, 'offline orders for', targetTab);
 
       if (targetTab === 'pending') {
         setPendingOrders(allOrders);
@@ -292,9 +302,8 @@ const DineInOrders = () => {
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
             const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
 
-            // If payment is completed or order status is completed, mark as completed
-            const isCompleted = orderStatus === 'completed' || paymentStatus === 'completed' ||
-              orderData.offlineStatusUpdated === true;
+            // If payment is completed or order status is completed (or cancelled), mark as completed
+            const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || paymentStatus === 'completed';
 
             return {
               ...orderData,
@@ -331,9 +340,9 @@ const DineInOrders = () => {
         if (!exists) {
           // Check if order is completed based on status
           const isCompleted = offlineOrder.orderStatus === 'completed' ||
+            offlineOrder.orderStatus === 'cancelled' ||
             offlineOrder.paymentStatus === 'completed' ||
-            offlineOrder.status === 'completed' ||
-            offlineOrder.offlineStatusUpdated === true;
+            offlineOrder.status === 'completed';
 
           if (isCompleted) {
             offlineCompletedOrders.push(offlineOrder);
@@ -838,6 +847,11 @@ const DineInOrders = () => {
 
       // Free the table once paid/completed
       emitTableFreed(order);
+
+      // Dispatch event to refresh badges immediately
+      window.dispatchEvent(new CustomEvent('orderUpdated', {
+        detail: { orderType: 'dine_in', orderId: order.id, action: 'markedPaid' }
+      }));
 
       // Show appropriate success message based on online/offline status
       const isOfflineOrder = order.offline;

@@ -368,45 +368,7 @@ const OrderSystem = () => {
     return () => window.removeEventListener('tableFreed', handleTableFreed);
   }, []);
 
-  // Local helper to reserve a table in offline cache/state when creating dine-in orders offline
-  reserveTableRef.current = useCallback(async (tableNum, orderInfo = {}) => {
-    if (isDelivery) return;
-    const numericTable = parseInt(tableNum);
-    if (Number.isNaN(numericTable)) return;
 
-    // Update local state so UI reflects reservation immediately
-    setOccupiedTables(prev => {
-      const exists = prev.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
-      if (exists) return prev;
-      return [...prev, {
-        tableNumber: numericTable,
-        table_number: numericTable,
-        id: orderInfo.orderId || orderInfo.id || null,
-        orderId: orderInfo.orderId || orderInfo.id || null,
-        orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
-        order_number: orderInfo.orderNumber || orderInfo.order_number || null
-      }];
-    });
-
-    // Persist to cached table availability so a refresh still shows it occupied
-    try {
-      const cached = await getCachedTableAvailability();
-      const exists = cached.some(t => parseInt(t.tableNumber || t.table_number) === numericTable);
-      if (!exists) {
-        const merged = [...cached, {
-          tableNumber: numericTable,
-          table_number: numericTable,
-          id: orderInfo.orderId || orderInfo.id || null,
-          orderId: orderInfo.orderId || orderInfo.id || null,
-          orderNumber: orderInfo.orderNumber || orderInfo.order_number || null,
-          order_number: orderInfo.orderNumber || orderInfo.order_number || null
-        }];
-        await cacheTableAvailability(merged);
-      }
-    } catch (err) {
-      console.warn('[OrderSystem] Failed to persist offline table reservation:', err);
-    }
-  }, [isDelivery, setOccupiedTables]);
 
   const updateActiveCart = useCallback((updates) => {
     setCarts(prevCarts =>

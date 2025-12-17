@@ -269,8 +269,8 @@ const DailySalesSummary = () => {
 
       // Fetch orders and expenses in parallel
       // Increase limit to get all orders and expenses in date range
-      const ordersParams = { ...params, limit: 1000 };
-      const expensesParams = { ...params, limit: 1000 };
+      const ordersParams = { ...params, limit: 10000 };
+      const expensesParams = { ...params, limit: 10000 };
       const [ordersResponse, expensesResponse] = await Promise.all([
         ordersAPI.getAll(ordersParams),  // Use the correct endpoint with query params
         expensesAPI.getAll(expensesParams) // Pass date params to expenses API as well

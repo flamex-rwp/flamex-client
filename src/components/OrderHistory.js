@@ -81,7 +81,9 @@ const OrderHistory = () => {
         filter: dateFilter,
         // Backend expects startDate/endDate for list filtering
         startDate: startDate,
-        endDate: endDate
+        startDate: startDate,
+        endDate: endDate,
+        limit: 10000 // Get all orders for the period to fix history view and PDF export
       };
 
       if (orderTypeFilter !== 'all') listParams.orderType = orderTypeFilter;

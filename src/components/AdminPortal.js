@@ -112,8 +112,8 @@ const AdminPortal = ({ user, onLogout }) => {
       }
 
       const [ordersRes, expensesRes] = await Promise.all([
-        api.get('/api/orders', { params }),
-        api.get('/api/expenses')
+        api.get('/api/orders', { params: { ...params, limit: 10000 } }),
+        api.get('/api/expenses', { params: { ...params, limit: 10000 } })
       ]);
 
       // Extract data from paginated response structure
@@ -147,7 +147,6 @@ const AdminPortal = ({ user, onLogout }) => {
         todayExpenses: todayExpenses.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
       });
 
-      setRecentOrders(orders);
       setRecentOrders(orders);
       setRecentExpenses(expenses);
     } catch (err) {

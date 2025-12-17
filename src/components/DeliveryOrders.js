@@ -123,7 +123,7 @@ const DeliveryOrders = () => {
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
             const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
             const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
-            const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+            const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || deliveryStatus === 'delivered';
 
             return {
               ...orderData,
@@ -159,6 +159,7 @@ const DeliveryOrders = () => {
         // 2. paymentStatus is 'completed', OR
         // 3. deliveryStatus is 'delivered' (for delivery orders)
         const isCompleted = orderStatus === 'completed' ||
+          orderStatus === 'cancelled' ||
           deliveryStatus === 'delivered';
 
         const matchesTab = targetTab === 'pending' ? !isCompleted : isCompleted;
@@ -256,8 +257,8 @@ const DeliveryOrders = () => {
             // For delivery orders, default deliveryStatus to 'pending' if not set
             const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
 
-            // Only mark as completed if orderStatus is actually 'completed' or delivery is delivered
-            const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+            // Only mark as completed if orderStatus is actually 'completed', 'cancelled' or delivery is delivered
+            const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || deliveryStatus === 'delivered';
 
             return {
               ...orderData,
@@ -300,7 +301,7 @@ const DeliveryOrders = () => {
           const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
 
           // Don't mark as completed just because paymentStatus is completed; delivery must be completed or explicitly set
-          const isCompleted = orderStatus === 'completed' || deliveryStatus === 'delivered';
+          const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || deliveryStatus === 'delivered';
 
           if (isCompleted) {
             offlineCompletedOrders.push(offlineOrder);
@@ -845,8 +846,11 @@ const DeliveryOrders = () => {
 
         updateLocalState();
         // Refresh stats and dispatch event to update badges
+        // Refresh stats and dispatch event to update badges
         await fetchStats();
-        window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated', offline: true }
+        }));
         showSuccess(`Status update saved offline. It will sync when you are back online.`);
         setUpdatingStatusId(null);
         isUpdatingStatus.current = false;
@@ -867,8 +871,11 @@ const DeliveryOrders = () => {
         });
         updateLocalState();
         // Refresh stats and dispatch event to update badges
+        // Refresh stats and dispatch event to update badges
         await fetchStats();
-        window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated', offline: true }
+        }));
         showSuccess(`Offline order status updated to ${newStatus.replace(/_/g, ' ')}`);
       } else {
         try {
@@ -902,7 +909,9 @@ const DeliveryOrders = () => {
           // Refresh stats and dispatch event to update badges
           await fetchStats();
           // Dispatch event to refresh badges in ManagerPortal
-          window.dispatchEvent(new CustomEvent('orderUpdated', { detail: { type: 'delivery' } }));
+          window.dispatchEvent(new CustomEvent('orderUpdated', {
+            detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated' }
+          }));
           // Refresh orders to ensure consistency with server (use a small delay to let local state update first)
           setTimeout(async () => {
             await fetchAllOrders();
@@ -1692,7 +1701,7 @@ const DeliveryOrders = () => {
                           fontWeight: '600',
                           textTransform: 'capitalize'
                         }}>
-                          Order: {displayStatus.replace(/_/g, ' ')}
+                          {/* Order: {displayStatus.replace(/_/g, ' ')} */}
                         </div>
                       ) : null;
                     })()}
