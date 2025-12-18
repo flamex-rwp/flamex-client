@@ -5,15 +5,15 @@ import './ManagerPortal.css';
 import OrderSystem from './OrderSystem';
 import { Spinner } from './LoadingSkeleton';
 import { getAllOrders } from '../utils/offlineDB';
-import { 
-  FaShoppingCart, 
-  FaUtensils, 
-  FaTruck, 
-  FaChartLine, 
-  FaChartBar, 
-  FaHistory, 
-  FaBox, 
-  FaUsers, 
+import {
+  FaShoppingCart,
+  FaUtensils,
+  FaTruck,
+  FaChartLine,
+  FaChartBar,
+  FaHistory,
+  FaBox,
+  FaUsers,
   FaMoneyBillWave,
   FaSignOutAlt,
   FaBars,
@@ -114,6 +114,7 @@ const ManagerPortal = ({ user, onLogout }) => {
       const dineRes = await ordersAPI.getDineInStats();
       const dineData = dineRes.data?.data || dineRes.data || {};
       dineInCount =
+        dineData.activeOrders ??
         dineData.pendingOrders ??
         dineData.pending_orders ??
         dineData.pending_payments?.count ??
@@ -170,7 +171,7 @@ const ManagerPortal = ({ user, onLogout }) => {
   useEffect(() => {
     fetchPendingBadges();
     const interval = setInterval(fetchPendingBadges, 15000);
-    
+
     // Listen for order creation/update events to refresh badges immediately
     const handleOrderCreated = (event) => {
       console.log('[ManagerPortal] Order event received, refreshing badges', event.detail);
@@ -179,10 +180,10 @@ const ManagerPortal = ({ user, onLogout }) => {
         fetchPendingBadges();
       }, 500);
     };
-    
+
     window.addEventListener('orderCreated', handleOrderCreated);
     window.addEventListener('orderUpdated', handleOrderCreated);
-    
+
     return () => {
       clearInterval(interval);
       window.removeEventListener('orderCreated', handleOrderCreated);

@@ -1619,18 +1619,23 @@ const DineInOrders = () => {
                   }}>
                     {formatCurrency(order.totalAmount || order.total_amount)}
                   </div>
-                  <div style={{
-                    marginTop: '0.5rem',
-                    padding: '0.25rem 0.75rem',
-                    borderRadius: '20px',
-                    background: activeTab === 'pending' ? '#fff4d8' : '#e6ffed',
-                    color: activeTab === 'pending' ? '#7c2d12' : '#198754',
-                    fontSize: '0.85rem',
-                    fontWeight: '600',
-                    display: 'inline-block'
-                  }}>
-                    {activeTab === 'pending' ? 'Pending Payment' : 'Paid'}
-                  </div>
+                  {(() => {
+                    const isPaid = order.paymentStatus === 'completed' || order.payment_status === 'completed';
+                    return (
+                      <div style={{
+                        marginTop: '0.5rem',
+                        padding: '0.25rem 0.75rem',
+                        borderRadius: '20px',
+                        background: isPaid ? '#e6ffed' : '#fff4d8',
+                        color: isPaid ? '#198754' : '#7c2d12',
+                        fontSize: '0.85rem',
+                        fontWeight: '600',
+                        display: 'inline-block'
+                      }}>
+                        {isPaid ? 'Paid' : 'Pending Payment'}
+                      </div>
+                    );
+                  })()}
                   {/* Display return amount if not zero */}
                   {(() => {
                     const returnAmt = order.returnAmount || order.return_amount || 0;
