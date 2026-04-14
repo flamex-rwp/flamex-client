@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { customerAPI } from '../services/customerAPI';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
 import { isOnline } from '../utils/offlineSync';
+import { useCustomerAddressesQuery, useCreateCustomerAddressMutation } from '../hooks';
 
 const CustomerAddressSelector = ({
   customer,
@@ -11,123 +12,113 @@ const CustomerAddressSelector = ({
   disabled = false
 }) => {
   const { showError, showSuccess } = useToast();
-  const [addresses, setAddresses] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const { online } = useOffline();
+  const createAddressMutation = useCreateCustomerAddressMutation();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newAddress, setNewAddress] = useState('');
   const [newAddressNotes, setNewAddressNotes] = useState('');
   const [newGoogleMapsLink, setNewGoogleMapsLink] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [offlineAddresses, setOfflineAddresses] = useState([]);
 
-  useEffect(() => {
-    if (customer && customer.id) {
-      loadAddresses();
-    } else {
-      setAddresses([]);
+  const isOfflineId = typeof customer?.id === 'string' && customer.id.startsWith('OFFLINE-');
+  const shouldFetch = Boolean(customer?.id && online && !isOfflineId);
+
+  const placeholderAddresses = useMemo(() => {
+    if (!customer?.id) return undefined;
+    if (customer.addresses?.length) return [...customer.addresses];
+    if (customer.address) {
+      return [{
+        id: 'legacy',
+        address: customer.address,
+        isDefault: true,
+        customerId: customer.id
+      }];
     }
+    return undefined;
   }, [customer]);
 
-  const loadAddresses = async () => {
-    if (!customer?.id) return;
+  const addressesQuery = useCustomerAddressesQuery(customer?.id, {
+    enabled: shouldFetch,
+    placeholderData: placeholderAddresses,
+  });
 
-    setLoading(true);
-    try {
-      // Check if offline - use cached customer data
-      const offlineMode = !isOnline();
-      const isOfflineId = typeof customer.id === 'string' && customer.id.startsWith('OFFLINE-');
-      let addressData = [];
+  useEffect(() => {
+    if (!customer?.id || shouldFetch) {
+      if (!customer?.id) setOfflineAddresses([]);
+      return undefined;
+    }
 
-      if (offlineMode || isOfflineId) {
-        // Offline mode - use customer data from cache or customer object
-        if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
-          addressData = customer.addresses;
-        } else if (customer.address) {
-          // Use legacy address field
-          addressData = [{
-            id: 'legacy',
-            address: customer.address,
-            isDefault: true,
-            customerId: customer.id
-          }];
-        } else {
-          // Try to get from cached customers
-          try {
-            const { getCachedCustomers } = await import('../utils/offlineDB');
-            const cachedCustomers = await getCachedCustomers();
-            const cachedCustomer = cachedCustomers.find(c => c.id === customer.id);
-            if (cachedCustomer) {
-              if (cachedCustomer.addresses && Array.isArray(cachedCustomer.addresses) && cachedCustomer.addresses.length > 0) {
-                addressData = cachedCustomer.addresses;
-              } else if (cachedCustomer.address) {
-                addressData = [{
-                  id: 'legacy',
-                  address: cachedCustomer.address,
-                  isDefault: true,
-                  customerId: customer.id
-                }];
-              }
-            }
-          } catch (cacheErr) {
-            console.warn('Failed to load from cache:', cacheErr);
-          }
-        }
-        setAddresses(addressData);
-      } else {
-        // Online mode - fetch from API
-        try {
-          const response = await customerAPI.getAddresses(customer.id);
-          addressData = response.data?.data || response.data || [];
-          setAddresses(Array.isArray(addressData) ? addressData : []);
+    let cancelled = false;
 
-          // If no addresses but customer has legacy address field, use that
-          if (addressData.length === 0 && customer.address) {
-            setAddresses([{
-              id: 'legacy',
-              address: customer.address,
-              isDefault: true,
-              customerId: customer.id
-            }]);
-          }
-        } catch (apiErr) {
-          // If API fails, fall back to cached or customer object data
-          console.warn('API failed, using cached data:', apiErr);
-          if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
-            addressData = customer.addresses;
-          } else if (customer.address) {
-            addressData = [{
-              id: 'legacy',
-              address: customer.address,
-              isDefault: true,
-              customerId: customer.id
-            }];
-          }
-          setAddresses(addressData);
-          // Don't show error if we have fallback data
-          if (addressData.length === 0) {
-            showError('Failed to load addresses');
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load addresses:', err);
-      // Fallback to customer object data
+    const buildFromCustomer = () => {
       if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
-        setAddresses(customer.addresses);
-      } else if (customer.address) {
-        setAddresses([{
+        return [...customer.addresses];
+      }
+      if (customer.address) {
+        return [{
           id: 'legacy',
           address: customer.address,
           isDefault: true,
           customerId: customer.id
-        }]);
-      } else {
-        showError('Failed to load addresses');
+        }];
       }
-    } finally {
-      setLoading(false);
+      return null;
+    };
+
+    const direct = buildFromCustomer();
+    if (direct) {
+      setOfflineAddresses(direct);
+      return undefined;
     }
-  };
+
+    import('../utils/offlineDB')
+      .then(({ getCachedCustomers }) => getCachedCustomers())
+      .then((cachedCustomers) => {
+        if (cancelled) return;
+        const cachedCustomer = cachedCustomers.find((c) => c.id === customer.id);
+        let addressData = [];
+        if (cachedCustomer?.addresses?.length) {
+          addressData = [...cachedCustomer.addresses];
+        } else if (cachedCustomer?.address) {
+          addressData = [{
+            id: 'legacy',
+            address: cachedCustomer.address,
+            isDefault: true,
+            customerId: customer.id
+          }];
+        }
+        setOfflineAddresses(addressData);
+      })
+      .catch((cacheErr) => {
+        console.warn('Failed to load from cache:', cacheErr);
+        if (!cancelled) setOfflineAddresses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [customer, shouldFetch]);
+
+  const addressesOnline = useMemo(() => {
+    if (!shouldFetch || !customer) return [];
+    const raw = addressesQuery.data;
+    let list = Array.isArray(raw) ? [...raw] : [];
+    if (list.length === 0 && customer.address) {
+      list = [{
+        id: 'legacy',
+        address: customer.address,
+        isDefault: true,
+        customerId: customer.id
+      }];
+    }
+    return list;
+  }, [shouldFetch, customer, addressesQuery.data]);
+
+  const addresses = shouldFetch ? addressesOnline : offlineAddresses;
+
+  const loading = shouldFetch && addressesQuery.isPending && placeholderAddresses == null;
 
   const handleAddAddress = async () => {
     if (!newAddress.trim()) {
@@ -135,10 +126,9 @@ const CustomerAddressSelector = ({
       return;
     }
 
-    // Check for duplicates
     const normalizedNew = newAddress.trim().toLowerCase();
     const duplicate = addresses.find(
-      addr => addr.address.trim().toLowerCase() === normalizedNew
+      (addr) => addr.address.trim().toLowerCase() === normalizedNew
     );
 
     if (duplicate) {
@@ -149,7 +139,6 @@ const CustomerAddressSelector = ({
     setAdding(true);
     try {
       if (!isOnline()) {
-        // Offline: create local address and queue sync
         const newAddr = {
           id: `OFFLINE-ADDR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           address: newAddress.trim(),
@@ -160,26 +149,23 @@ const CustomerAddressSelector = ({
           offline: true,
         };
 
-        // Update local state
-        setAddresses(prev => [...prev, newAddr]);
+        setOfflineAddresses((prev) => [...prev, newAddr]);
         setNewAddress('');
         setNewAddressNotes('');
         setNewGoogleMapsLink('');
         setIsDefault(false);
         setShowAddForm(false);
 
-        // Persist in cached customer
         try {
           const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
           const cached = await getCachedCustomers();
-          const current = cached.find(c => c.id === customer.id) || customer;
+          const current = cached.find((c) => c.id === customer.id) || customer;
           const updatedCustomer = {
             ...current,
             addresses: [...(current.addresses || []), newAddr],
           };
           await saveCustomer(updatedCustomer);
 
-          // Queue pending operation for sync
           await addPendingOperation({
             type: 'update_customer_address',
             endpoint: `/api/customers/${customer.id}/addresses`,
@@ -203,16 +189,16 @@ const CustomerAddressSelector = ({
         return;
       }
 
-      // Online path
-      const response = await customerAPI.createAddress(customer.id, {
-        address: newAddress.trim(),
-        isDefault: isDefault,
-        notes: newAddressNotes.trim() || undefined,
-        googleMapsLink: newGoogleMapsLink.trim() || undefined
+      const newAddr = await createAddressMutation.mutateAsync({
+        customerId: customer.id,
+        data: {
+          address: newAddress.trim(),
+          isDefault: isDefault,
+          notes: newAddressNotes.trim() || undefined,
+          googleMapsLink: newGoogleMapsLink.trim() || undefined
+        }
       });
 
-      const newAddr = response.data?.data || response.data;
-      setAddresses(prev => [...prev, newAddr]);
       setNewAddress('');
       setNewAddressNotes('');
       setNewGoogleMapsLink('');
@@ -220,9 +206,8 @@ const CustomerAddressSelector = ({
       setShowAddForm(false);
       showSuccess('Address added successfully');
 
-      // Auto-select the new address - pass full object to include googleMapsLink
       if (onAddressSelect) {
-        onAddressSelect(newAddr); // Pass full address object, not just string
+        onAddressSelect(newAddr);
       }
     } catch (err) {
       console.error('Failed to add address:', err);
@@ -235,13 +220,10 @@ const CustomerAddressSelector = ({
 
   const handleSelectAddress = (addressString) => {
     if (onAddressSelect) {
-      // Find the full address object to include googleMapsLink and notes
-      const fullAddress = addresses.find(addr => addr.address === addressString);
+      const fullAddress = addresses.find((addr) => addr.address === addressString);
       if (fullAddress) {
-        // Pass the full address object
         onAddressSelect(fullAddress);
       } else {
-        // Fallback to just the string if address not found
         onAddressSelect(addressString);
       }
     }
@@ -257,7 +239,11 @@ const CustomerAddressSelector = ({
         Delivery Address
       </label>
 
-      {loading ? (
+      {shouldFetch && addressesQuery.isError && addresses.length === 0 ? (
+        <div style={{ padding: '1rem', textAlign: 'center', color: '#dc3545' }}>
+          Failed to load addresses
+        </div>
+      ) : loading ? (
         <div style={{ padding: '1rem', textAlign: 'center', color: '#6c757d' }}>
           Loading addresses...
         </div>
@@ -286,9 +272,8 @@ const CustomerAddressSelector = ({
             ))}
           </select>
 
-          {/* Show selected address details */}
           {selectedAddress && (() => {
-            const selectedAddrObj = addresses.find(addr => addr.address === selectedAddress);
+            const selectedAddrObj = addresses.find((addr) => addr.address === selectedAddress);
             if (selectedAddrObj) {
               return (
                 <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8f9fa', borderRadius: '8px', fontSize: '0.85rem' }}>
@@ -471,4 +456,3 @@ const CustomerAddressSelector = ({
 };
 
 export default CustomerAddressSelector;
-

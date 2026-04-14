@@ -247,18 +247,21 @@ export const ordersAPI = {
   getDeliveryStats: (params = {}, config = {}) => api.get('/api/orders/delivery/stats', { params, ...config }),
   assignRider: (id, riderId) => api.put(`/api/orders/${id}/assign-rider`, { riderId }),
   updateDeliveryStatus: (id, deliveryStatus) => api.put(`/api/orders/${id}/delivery/status`, { deliveryStatus }),
+  markDelivered: (id) => api.put(`/api/orders/${id}/mark-delivered`),
 
   // Order status updates (for both dine-in and delivery)
   updateOrderStatus: (id, order_status) => api.put(`/api/orders/${id}/status`, { order_status }),
 
   // Reports
   getOrderStatistics: (params) => api.get('/api/orders/statistics/summary', { params }),
+  getOrderStatisticsV2: (params) => api.get('/api/orders/statistics/summary-v2', { params }),
   getItemsSales: (params) => api.get('/api/orders/reports/sales', { params }), // Renamed from getItemsSalesReport
   getItemsSalesReport: (params) => api.get('/api/orders/reports/sales', { params }), // Keep old name for backward compatibility
 
   // History
   getOrderHistory: (id) => api.get(`/api/orders/${id}/history`), // Added for frontend compatibility
   getOrderEditHistory: (id) => api.get(`/api/orders/${id}/history`),
+  getOrdersHistory: (params = {}) => api.get('/api/orders/history', { params }),
 };
 
 // Delivery API (simplified - using ordersAPI instead)
@@ -311,6 +314,15 @@ export const printerAPI = {
 export const businessInfoAPI = {
   getAll: () => api.get('/api/business-info'),
   update: (key, value) => api.put(`/api/business-info/${key}`, { value }),
+};
+
+// Users API (admin user management)
+export const usersAPI = {
+  getAll: () => api.get('/api/users'),
+  getById: (id) => api.get(`/api/users/${id}`),
+  create: (data) => api.post('/api/users', data),
+  update: (id, data) => api.put(`/api/users/${id}`, data),
+  delete: (id) => api.delete(`/api/users/${id}`),
 };
 
 export default api;

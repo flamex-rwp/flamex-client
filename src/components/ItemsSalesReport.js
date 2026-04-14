@@ -1,10 +1,20 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ordersAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineModal from './OfflineModal';
 import dayjs from 'dayjs';
 import jsPDF from 'jspdf';
+import { FaBox, FaFilePdf } from 'react-icons/fa';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import ScreenLoading from './ScreenLoading';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter
+} from '../utils/filterSessionPersistence';
 
 const formatCurrency = (value) => {
   const amount = Number(value || 0);
@@ -15,23 +25,98 @@ const formatCurrency = (value) => {
 const ItemsSalesReport = () => {
   const { showSuccess, showError } = useToast();
   const { online } = useOffline();
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
+  const initialDateFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.itemsSalesReport);
+    if (!s) {
+      return { dateFilter: 'today', startDate: null, endDate: null, showCustomRange: false };
+    }
+    return {
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange)
+    };
+  }, []);
+
   const [itemsSales, setItemsSales] = useState([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedItemsSalesOnceRef = useRef(false);
   const [error, setError] = useState('');
-  const [dateFilter, setDateFilter] = useState('today');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [dateFilter, setDateFilter] = useState(initialDateFilters.dateFilter);
+  const [startDate, setStartDate] = useState(initialDateFilters.startDate);
+  const [endDate, setEndDate] = useState(initialDateFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialDateFilters.showCustomRange);
+
+  // Helper function to get business day date range (4am to 4am)
+  // Returns *business day labels* (dates) that the backend will interpret correctly.
+  // For single days, this matches 4am→4am logic, and for ranges (week/month)
+  // it uses the first/last business-day label in the period without overshooting.
+  const getBusinessDayRange = useCallback((filter, customStartDate = null, customEndDate = null) => {
+    const now = dayjs();
+    const hour = now.hour();
+
+    // Current business-day label: before 4 AM belongs to previous calendar day
+    const currentLabel = hour < 4 ? now.subtract(1, 'day') : now;
+
+    let startLabel;
+    let endLabel;
+
+    if (filter === 'today') {
+      startLabel = currentLabel;
+      endLabel = currentLabel;
+    } else if (filter === 'yesterday') {
+      const yesterdayLabel = currentLabel.subtract(1, 'day');
+      startLabel = yesterdayLabel;
+      endLabel = yesterdayLabel;
+    } else if (filter === 'this_week') {
+      // For week/month, use actual current date to get calendar boundaries (matching OrderHistory logic)
+      // The backend will interpret these dates correctly with 4am→4am logic
+      const weekStart = now.startOf('week');
+      startLabel = weekStart;
+      endLabel = currentLabel;
+    } else if (filter === 'this_month') {
+      // For month, use actual current date to get calendar boundaries (matching OrderHistory logic)
+      const monthStart = now.startOf('month');
+      startLabel = monthStart;
+      endLabel = currentLabel;
+    } else if (filter === 'custom' && customStartDate && customEndDate) {
+      // Custom uses selected dates as business-day labels
+      startLabel = dayjs(customStartDate);
+      endLabel = dayjs(customEndDate);
+    } else {
+      // Default to today
+      startLabel = currentLabel;
+      endLabel = currentLabel;
+    }
+
+    return {
+      startDate: startLabel.format('YYYY-MM-DD'),
+      endDate: endLabel.format('YYYY-MM-DD')
+    };
+  }, []);
 
   const fetchItemsSales = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const params = { filter: dateFilter };
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
-      }
+      // Convert filter to business day date range (4am to 4am)
+      const { startDate: businessStartDate, endDate: businessEndDate } = getBusinessDayRange(dateFilter, startDate, endDate);
+      
+      // Pass as 'start' and 'end' so the API wrapper uses them directly (bypassing its own date conversion)
+      const params = {
+        start: businessStartDate,
+        end: businessEndDate
+      };
+
+      console.log('📊 [ItemsSalesReport] Fetching with business day range:', {
+        filter: dateFilter,
+        customStart: startDate,
+        customEnd: endDate,
+        businessStart: businessStartDate,
+        businessEnd: businessEndDate
+      });
 
       const response = await ordersAPI.getItemsSales(params);
 
@@ -54,23 +139,27 @@ const ItemsSalesReport = () => {
       }
     } finally {
       setLoading(false);
+      hasLoadedItemsSalesOnceRef.current = true;
     }
-  }, [dateFilter, startDate, endDate]);
+  }, [dateFilter, startDate, endDate, getBusinessDayRange]);
 
   useEffect(() => {
     fetchItemsSales();
   }, [fetchItemsSales]);
 
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.itemsSalesReport, {
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange
+    });
+  }, [dateFilter, startDate, endDate, showCustomRange]);
+
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      } else {
-        setDateFilter('today');
-        setStartDate(null);
-        setEndDate(null);
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
       setDateFilter(filter);
       setStartDate(null);
@@ -85,6 +174,31 @@ const ItemsSalesReport = () => {
     setDateFilter('custom');
     setShowCustomRange(false);
   };
+
+  const resetDateFilter = useCallback(() => {
+    setDateFilter('today');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(false);
+  }, []);
+
+  const clearAppliedCustomRange = useCallback(() => {
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
+
+  const dateFilterBannerItems = useMemo(() => {
+    if (!isCustomDateRangeApplied(dateFilter, startDate, endDate)) return [];
+    return [
+      {
+        id: 'date',
+        label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+        onRemove: clearAppliedCustomRange
+      }
+    ];
+  }, [dateFilter, startDate, endDate, clearAppliedCustomRange]);
 
   const aggregateItemsSales = () => {
     const itemsMap = {};
@@ -151,13 +265,31 @@ const ItemsSalesReport = () => {
       doc.text('Flamex', pageWidth / 2, yPosition, { align: 'center' });
       yPosition += lineHeight * 2;
 
-      // Date Range
+      // Date Range - Show business day range (4am to 4am)
       doc.setFontSize(10);
-      let filterText = `Date: ${dateFilter}`;
+      let filterText = '';
+      const { startDate: reportStartDate, endDate: reportEndDate } = getBusinessDayRange(dateFilter, startDate, endDate);
+      
       if (dateFilter === 'custom' && startDate && endDate) {
-        filterText = `Date Range: ${dayjs(startDate).format('MMM D, YYYY')} - ${dayjs(endDate).format('MMM D, YYYY')}`;
+        filterText = `Date Range: ${dayjs(startDate).format('MMM D, YYYY')} 4:00 AM - ${dayjs(endDate).add(1, 'day').format('MMM D, YYYY')} 4:00 AM`;
       } else if (dateFilter === 'today') {
-        filterText = `Date: ${dayjs().format('MMM D, YYYY')}`;
+        const today = dayjs();
+        const hour = today.hour();
+        if (hour < 4) {
+          filterText = `Today (Business Day): ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.format('MMM D, YYYY')} 4:00 AM`;
+        } else {
+          filterText = `Today (Business Day): ${today.format('MMM D, YYYY')} 4:00 AM - ${today.add(1, 'day').format('MMM D, YYYY')} 4:00 AM`;
+        }
+      } else if (dateFilter === 'yesterday') {
+        const today = dayjs();
+        const hour = today.hour();
+        if (hour < 4) {
+          filterText = `Yesterday (Business Day): ${today.subtract(2, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM`;
+        } else {
+          filterText = `Yesterday (Business Day): ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.format('MMM D, YYYY')} 4:00 AM`;
+        }
+      } else {
+        filterText = `Date Range: ${dayjs(reportStartDate).format('MMM D, YYYY')} 4:00 AM - ${dayjs(reportEndDate).format('MMM D, YYYY')} 4:00 AM`;
       }
       doc.text(filterText, margin, yPosition);
       yPosition += lineHeight;
@@ -257,14 +389,14 @@ const ItemsSalesReport = () => {
   };
 
   // Show offline modal if offline
-  if (!online) {
+  if (!online && !isElectron) {
     return <OfflineModal title="Items Sales Report - Offline" />;
   }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold' }}>📦 Items Sales Report</h1>
+        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaBox /> Items Sales Report</h1>
 
         {/* Summary Cards */}
         <style>{`
@@ -287,6 +419,22 @@ const ItemsSalesReport = () => {
           @media (max-width: 480px) {
             .summary-cards-grid {
               grid-template-columns: 1fr;
+            }
+          }
+          .items-sales-custom-dates-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+            gap: 1rem;
+            align-items: end;
+            width: 100%;
+          }
+          @media (max-width: 640px) {
+            .items-sales-custom-dates-grid {
+              grid-template-columns: 1fr;
+            }
+            .items-sales-custom-apply-btn {
+              justify-self: stretch;
+              width: 100%;
             }
           }
         `}</style>
@@ -377,16 +525,17 @@ const ItemsSalesReport = () => {
               ))}
             </div>
 
-            {/* Custom Date Range */}
-            {showCustomRange && (
+            {/* Custom date range: stay visible while custom is active so Apply does not collapse the panel */}
+            {(showCustomRange || dateFilter === 'custom') && (
               <div style={{
                 padding: '1rem',
                 background: '#f8f9fa',
                 borderRadius: '8px',
-                marginBottom: '1rem'
+                marginBottom: '1rem',
+                border: '1px solid #e9ecef'
               }}>
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                  <div style={{ flex: '1 1 200px' }}>
+                <div className="items-sales-custom-dates-grid">
+                  <div style={{ minWidth: 0 }}>
                     <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: '600', color: '#495057' }}>
                       Start Date
                     </label>
@@ -396,6 +545,8 @@ const ItemsSalesReport = () => {
                       onChange={(e) => setStartDate(e.target.value)}
                       style={{
                         width: '100%',
+                        maxWidth: '100%',
+                        boxSizing: 'border-box',
                         padding: '0.5rem',
                         borderRadius: '8px',
                         border: '2px solid #e2e8f0',
@@ -403,7 +554,7 @@ const ItemsSalesReport = () => {
                       }}
                     />
                   </div>
-                  <div style={{ flex: '1 1 200px' }}>
+                  <div style={{ minWidth: 0 }}>
                     <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: '600', color: '#495057' }}>
                       End Date
                     </label>
@@ -413,6 +564,8 @@ const ItemsSalesReport = () => {
                       onChange={(e) => setEndDate(e.target.value)}
                       style={{
                         width: '100%',
+                        maxWidth: '100%',
+                        boxSizing: 'border-box',
                         padding: '0.5rem',
                         borderRadius: '8px',
                         border: '2px solid #e2e8f0',
@@ -421,6 +574,7 @@ const ItemsSalesReport = () => {
                     />
                   </div>
                   <button
+                    type="button"
                     onClick={() => handleDateFilterChange(startDate, endDate)}
                     disabled={!startDate || !endDate}
                     style={{
@@ -432,23 +586,48 @@ const ItemsSalesReport = () => {
                       fontWeight: '600',
                       cursor: (!startDate || !endDate) ? 'not-allowed' : 'pointer',
                       fontSize: '0.9rem',
-                      opacity: (!startDate || !endDate) ? 0.5 : 1
+                      opacity: (!startDate || !endDate) ? 0.5 : 1,
+                      whiteSpace: 'nowrap',
+                      justifySelf: 'start'
                     }}
+                    className="items-sales-custom-apply-btn"
                   >
                     Apply
                   </button>
                 </div>
-                {(startDate && endDate) && (
-                  <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: '#6c757d' }}>
-                    Active Range: {dayjs(startDate).format('MMM D, YYYY')} - {dayjs(endDate).format('MMM D, YYYY')}
+                {dateFilter !== 'custom' && (
+                  <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: '#6c757d', fontStyle: 'italic' }}>
+                    {(() => {
+                      const { startDate: rangeStart, endDate: rangeEnd } = getBusinessDayRange(dateFilter, startDate, endDate);
+                      const today = dayjs();
+                      const hour = today.hour();
+                      if (dateFilter === 'today') {
+                        if (hour < 4) {
+                          return `Business Day: ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.format('MMM D, YYYY')} 4:00 AM`;
+                        } else {
+                          return `Business Day: ${today.format('MMM D, YYYY')} 4:00 AM - ${today.add(1, 'day').format('MMM D, YYYY')} 4:00 AM`;
+                        }
+                      } else if (dateFilter === 'yesterday') {
+                        if (hour < 4) {
+                          return `Business Day: ${today.subtract(2, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM`;
+                        } else {
+                          return `Business Day: ${today.subtract(1, 'day').format('MMM D, YYYY')} 4:00 AM - ${today.format('MMM D, YYYY')} 4:00 AM`;
+                        }
+                      } else {
+                        return `Business Day Range: ${dayjs(rangeStart).format('MMM D, YYYY')} 4:00 AM - ${dayjs(rangeEnd).format('MMM D, YYYY')} 4:00 AM`;
+                      }
+                    })()}
                   </div>
                 )}
               </div>
             )}
 
+            <AppliedFiltersBanner items={dateFilterBannerItems} />
+
             {/* Export PDF Button */}
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
               <button
+                type="button"
                 onClick={handleExportPDF}
                 disabled={aggregatedItems.length === 0}
                 style={{
@@ -463,17 +642,15 @@ const ItemsSalesReport = () => {
                   opacity: aggregatedItems.length === 0 ? 0.5 : 1
                 }}
               >
-                📄 Export PDF ({aggregatedItems.length} items)
+                <FaFilePdf style={{ marginRight: '0.5rem' }} /> Export PDF ({aggregatedItems.length} items)
               </button>
             </div>
           </div>
         </div>
 
-        {/* Items Table */}
+        {/* Items Table — show screen loading on every fetch/refetch */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '3rem', color: '#6c757d' }}>
-            Loading items sales...
-          </div>
+          <ScreenLoading label="Loading items sales..." />
         ) : error ? (
           <div style={{
             background: '#fff5f5',
@@ -493,7 +670,7 @@ const ItemsSalesReport = () => {
             textAlign: 'center',
             color: '#6c757d'
           }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📦</div>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}><FaBox /></div>
             <h3>No items sold</h3>
             <p>Try adjusting your date filters</p>
           </div>

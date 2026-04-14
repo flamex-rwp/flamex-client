@@ -1,9 +1,27 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { reportsAPI, ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
 import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineModal from './OfflineModal';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import ScreenLoading from './ScreenLoading';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter,
+  sanitizeDeliveryReportTab,
+  sanitizeCodStatus
+} from '../utils/filterSessionPersistence';
+import {
+  FaTruck,
+  FaExclamationTriangle,
+  FaCreditCard,
+  FaChartLine,
+  FaMapMarkerAlt
+} from 'react-icons/fa';
 
 const formatCurrency = (value) => {
   const amount = Number(value || 0);
@@ -14,11 +32,34 @@ const formatCurrency = (value) => {
 const DeliveryReports = () => {
   const { showError } = useToast();
   const { online } = useOffline();
-  const [activeTab, setActiveTab] = useState('overview');
-  const [dateFilter, setDateFilter] = useState('today');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+
+  const initialScreenFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.deliveryReports);
+    if (!s) {
+      return {
+        activeTab: 'overview',
+        dateFilter: 'today',
+        startDate: null,
+        endDate: null,
+        showCustomRange: false,
+        codStatus: 'pending'
+      };
+    }
+    return {
+      activeTab: sanitizeDeliveryReportTab(s.activeTab),
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange),
+      codStatus: sanitizeCodStatus(s.codStatus)
+    };
+  }, []);
+
+  const [activeTab, setActiveTab] = useState(initialScreenFilters.activeTab);
+  const [dateFilter, setDateFilter] = useState(initialScreenFilters.dateFilter);
+  const [startDate, setStartDate] = useState(initialScreenFilters.startDate);
+  const [endDate, setEndDate] = useState(initialScreenFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialScreenFilters.showCustomRange);
   const [loading, setLoading] = useState({
     overview: false,
     areas: false,
@@ -46,7 +87,7 @@ const DeliveryReports = () => {
   const [areas, setAreas] = useState([]);
 
   // COD data
-  const [codStatus, setCodStatus] = useState('pending');
+  const [codStatus, setCodStatus] = useState(initialScreenFilters.codStatus);
   const [codOrders, setCodOrders] = useState([]);
   const [selectedCod, setSelectedCod] = useState([]);
 
@@ -227,16 +268,21 @@ const DeliveryReports = () => {
     }
   }, [activeTab, dateFilter, startDate, endDate, fetchOverview, fetchDeliveryStats, fetchAreas, fetchCodOrders, online]);
 
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.deliveryReports, {
+      activeTab,
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange,
+      codStatus
+    });
+  }, [activeTab, dateFilter, startDate, endDate, showCustomRange, codStatus]);
+
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      } else {
-        setDateFilter('today');
-        setStartDate(null);
-        setEndDate(null);
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
       setDateFilter(filter);
       setStartDate(null);
@@ -251,6 +297,20 @@ const DeliveryReports = () => {
     setDateFilter('custom');
     setShowCustomRange(false);
   };
+
+  const resetDateFilter = useCallback(() => {
+    setDateFilter('today');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(false);
+  }, []);
+
+  const clearAppliedCustomRange = useCallback(() => {
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
 
   const toggleCodSelection = (orderId) => {
     setSelectedCod(prev => {
@@ -306,7 +366,7 @@ const DeliveryReports = () => {
       {/* Header */}
       <div style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1f2937' }}>
-          🚚 Delivery Reports
+          <FaTruck style={{ marginRight: '0.5rem' }} /> Delivery Reports
         </h1>
         <p style={{ color: '#6b7280', fontSize: '0.95rem' }}>
           Comprehensive delivery analytics, area analysis, and COD management
@@ -475,20 +535,19 @@ const DeliveryReports = () => {
           </div>
         )}
 
-        {/* Active Range Display */}
-        {(dateFilter === 'custom' && startDate && endDate) && (
-          <div style={{
-            marginTop: '0.75rem',
-            padding: '0.5rem 0.75rem',
-            background: '#fff4d8',
-            borderRadius: '6px',
-            fontSize: '0.85rem',
-            color: '#856404',
-            fontWeight: '600'
-          }}>
-            📅 Active Range: {dayjs(startDate).format('MMM D, YYYY')} - {dayjs(endDate).format('MMM D, YYYY')}
-          </div>
-        )}
+        <AppliedFiltersBanner
+          items={
+            isCustomDateRangeApplied(dateFilter, startDate, endDate)
+              ? [
+                  {
+                    id: 'date',
+                    label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+                    onRemove: clearAppliedCustomRange
+                  }
+                ]
+              : []
+          }
+        />
       </div>
 
       {/* Tabs */}
@@ -565,7 +624,7 @@ const DeliveryReports = () => {
       {activeTab === 'overview' && (
         <div>
           {loading.overview || loading.stats ? (
-            <div style={{ textAlign: 'center', padding: '2rem' }}>Loading...</div>
+            <ScreenLoading label="Loading delivery report..." />
           ) : (
             <>
               {/* Summary Cards */}
@@ -736,7 +795,7 @@ const DeliveryReports = () => {
                   boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
                 }}>
                   <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
-                    💳 Payment Breakdown
+                    <FaCreditCard style={{ marginRight: '0.5rem' }} /> Payment Breakdown
                   </h3>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem', background: '#fff4d8', borderRadius: '8px' }}>
@@ -768,7 +827,7 @@ const DeliveryReports = () => {
                   boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
                 }}>
                   <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.25rem', fontWeight: 'bold', color: '#1f2937' }}>
-                    📈 Daily Trend
+                    <FaChartLine style={{ marginRight: '0.5rem' }} /> Daily Trend
                   </h3>
                   <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
                     {trendData.length === 0 ? (
@@ -807,7 +866,7 @@ const DeliveryReports = () => {
       {activeTab === 'areas' && (
         <div>
           {loading.areas ? (
-            <div style={{ textAlign: 'center', padding: '2rem' }}>Loading area analysis...</div>
+            <ScreenLoading label="Loading area analysis..." />
           ) : (
             <div style={{
               background: 'white',
@@ -816,7 +875,7 @@ const DeliveryReports = () => {
               boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
             }}>
               <h3 style={{ margin: '0 0 1.5rem 0', fontSize: '1.5rem', fontWeight: 'bold', color: '#1f2937' }}>
-                📍 Area Analysis
+                <FaMapMarkerAlt style={{ marginRight: '0.5rem' }} /> Area Analysis
               </h3>
               {areas.length === 0 ? (
                 <p style={{ color: '#6b7280', textAlign: 'center', padding: '2rem' }}>
@@ -905,7 +964,7 @@ const DeliveryReports = () => {
                 opacity: loading.cod ? 0.5 : 1
               }}
             >
-              Refresh
+              {loading.cod ? 'Processing...' : 'Refresh'}
             </button>
             <button
               onClick={handleBulkCollect}
@@ -921,7 +980,7 @@ const DeliveryReports = () => {
                 opacity: (selectedCod.length === 0 || loading.cod) ? 0.5 : 1
               }}
             >
-              Mark Selected Collected ({selectedCod.length})
+              {loading.cod ? 'Processing...' : `Mark Selected Collected (${selectedCod.length})`}
             </button>
             <div style={{ marginLeft: 'auto', fontSize: '0.9rem', color: '#6b7280' }}>
               <strong>Pending:</strong> {formatCurrency(codOrders?.totals?.pendingAmount || 0)} ·
@@ -930,7 +989,7 @@ const DeliveryReports = () => {
           </div>
 
           {loading.cod ? (
-            <div style={{ textAlign: 'center', padding: '2rem' }}>Loading COD data...</div>
+            <ScreenLoading label="Loading COD data..." />
           ) : (
             <div style={{
               background: 'white',

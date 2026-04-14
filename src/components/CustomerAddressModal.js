@@ -1,12 +1,114 @@
-import React, { useState, useEffect } from 'react';
-import { customerAPI } from '../services/customerAPI';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
+import { useOffline } from '../contexts/OfflineContext';
 import ConfirmationModal from './ConfirmationModal';
+import {
+  useCustomerAddressesQuery,
+  useCreateCustomerAddressMutation,
+  useUpdateCustomerAddressMutation,
+  useDeleteCustomerAddressMutation,
+} from '../hooks';
 
 const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) => {
   const { showSuccess, showError } = useToast();
-  const [addresses, setAddresses] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const { online } = useOffline();
+  const createAddressMutation = useCreateCustomerAddressMutation();
+  const updateAddressMutation = useUpdateCustomerAddressMutation();
+  const deleteAddressMutation = useDeleteCustomerAddressMutation();
+
+  const customerIdStr = String(customer?.id ?? '');
+  const isOfflineId = typeof customer?.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+  const shouldFetch = Boolean(isOpen && customer?.id && online && !isOfflineId);
+
+  const placeholderAddresses = useMemo(() => {
+    if (!customer?.id) return undefined;
+    if (customer.addresses?.length) return [...customer.addresses];
+    if (customer.address) {
+      return [{
+        id: 'legacy',
+        address: customer.address,
+        isDefault: true,
+        customerId: customer.id
+      }];
+    }
+    return undefined;
+  }, [customer]);
+
+  const addressesQuery = useCustomerAddressesQuery(customer?.id, {
+    enabled: shouldFetch,
+    placeholderData: placeholderAddresses,
+  });
+
+  const [offlineAddresses, setOfflineAddresses] = useState([]);
+
+  useEffect(() => {
+    if (!isOpen || !customer || shouldFetch) return undefined;
+
+    let cancelled = false;
+
+    const fromProp = () => {
+      if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
+        return [...customer.addresses];
+      }
+      if (customer.address) {
+        return [{
+          id: 'legacy',
+          address: customer.address,
+          isDefault: true,
+          customerId: customer.id
+        }];
+      }
+      return null;
+    };
+
+    const direct = fromProp();
+    if (direct) {
+      setOfflineAddresses(direct);
+      return undefined;
+    }
+
+    import('../utils/offlineDB').then(({ getCachedCustomers }) =>
+      getCachedCustomers().then((cached) => {
+        if (cancelled) return;
+        const found = cached.find((c) => c.id === customer.id);
+        let list = [];
+        if (found?.addresses?.length) list = [...found.addresses];
+        else if (found?.address) {
+          list = [{
+            id: 'legacy',
+            address: found.address,
+            isDefault: true,
+            customerId: customer.id
+          }];
+        }
+        setOfflineAddresses(list);
+      }).catch(() => {
+        if (!cancelled) setOfflineAddresses([]);
+      })
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, customer, shouldFetch]);
+
+  const addressesOnline = useMemo(() => {
+    if (!shouldFetch || !customer) return [];
+    const raw = addressesQuery.data;
+    let list = Array.isArray(raw) ? [...raw] : [];
+    if (list.length === 0 && customer.address) {
+      list = [{
+        id: 'legacy',
+        address: customer.address,
+        isDefault: true,
+        customerId: customer.id
+      }];
+    }
+    return list;
+  }, [shouldFetch, customer, addressesQuery.data]);
+
+  const addresses = shouldFetch ? addressesOnline : offlineAddresses;
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [newAddress, setNewAddress] = useState('');
   const [newAddressNotes, setNewAddressNotes] = useState('');
@@ -21,57 +123,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
     onConfirm: null
   });
 
-  useEffect(() => {
-    if (isOpen && customer?.id) {
-      loadAddresses();
-    }
-  }, [isOpen, customer]);
-
-  const loadAddresses = async () => {
-    if (!customer?.id) return;
-
-    setLoading(true);
-    try {
-      // Always fetch fresh addresses from API to ensure we have all addresses
-      const response = await customerAPI.getAddresses(customer.id);
-      const addressData = response.data?.data || response.data || [];
-      let addressList = Array.isArray(addressData) ? addressData : [];
-
-      // If no addresses but customer has legacy address field, use that (online fallback)
-      if (addressList.length === 0 && customer.address) {
-        addressList = [{
-          id: 'legacy',
-          address: customer.address,
-          isDefault: true,
-          customerId: customer.id
-        }];
-      }
-
-      console.log(`[CustomerAddressModal] Loaded ${addressList.length} addresses for customer ${customer.id}`);
-      setAddresses(addressList);
-    } catch (err) {
-      console.error('Failed to load addresses:', err);
-
-      // Fallback: use addresses from customer object if available
-      if (customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
-        console.log(`[CustomerAddressModal] Using addresses from customer object: ${customer.addresses.length}`);
-        setAddresses(customer.addresses);
-      } else if (customer.address) {
-        // Fallback to legacy address if available
-        setAddresses([{
-          id: 'legacy',
-          address: customer.address,
-          isDefault: true,
-          customerId: customer.id
-        }]);
-      } else {
-        setAddresses([]);
-        showError('Failed to load addresses');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = shouldFetch && addressesQuery.isPending && placeholderAddresses == null;
 
   const handleAddAddress = async () => {
     if (!newAddress.trim()) {
@@ -79,10 +131,9 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
       return;
     }
 
-    // Check for duplicates
     const normalizedNew = newAddress.trim().toLowerCase();
     const duplicate = addresses.find(
-      addr => addr.address.trim().toLowerCase() === normalizedNew
+      (addr) => addr.address.trim().toLowerCase() === normalizedNew
     );
 
     if (duplicate) {
@@ -92,11 +143,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 
     setAdding(true);
     try {
-      const customerIdStr = String(customer.id ?? '');
-      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
-
       if (!navigator.onLine || isOfflineId) {
-        // Offline: create local address and queue sync
         const newAddr = {
           id: `OFFLINE-ADDR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           address: newAddress.trim(),
@@ -110,7 +157,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         try {
           const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
           const cached = await getCachedCustomers();
-          const current = cached.find(c => c.id === customer.id) || customer;
+          const current = cached.find((c) => c.id === customer.id) || customer;
           const updatedCustomer = {
             ...current,
             addresses: [...(current.addresses || []), newAddr]
@@ -133,7 +180,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
           console.warn('Failed to cache offline address:', offlineErr);
         }
 
-        setAddresses(prev => [...prev, newAddr]);
+        setOfflineAddresses((prev) => [...prev, newAddr]);
         setNewAddress('');
         setNewAddressNotes('');
         setNewGoogleMapsLink('');
@@ -144,16 +191,16 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         return;
       }
 
-      // Online path
-      const response = await customerAPI.createAddress(customer.id, {
-        address: newAddress.trim(),
-        isDefault: isDefault,
-        notes: newAddressNotes.trim() || undefined,
-        googleMapsLink: newGoogleMapsLink.trim() || undefined
+      await createAddressMutation.mutateAsync({
+        customerId: customer.id,
+        data: {
+          address: newAddress.trim(),
+          isDefault,
+          notes: newAddressNotes.trim() || undefined,
+          googleMapsLink: newGoogleMapsLink.trim() || undefined
+        }
       });
 
-      const newAddr = response.data?.data || response.data;
-      await loadAddresses(); // Reload to get updated list
       setNewAddress('');
       setNewAddressNotes('');
       setNewGoogleMapsLink('');
@@ -182,16 +229,12 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 
     setDeletingId(addressId);
     try {
-      const customerIdStr = String(customer.id ?? '');
-      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
-
       if (!navigator.onLine || isOfflineId) {
-        // Offline delete: remove locally and queue sync
         try {
           const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
           const cached = await getCachedCustomers();
-          const current = cached.find(c => c.id === customer.id) || customer;
-          const updatedAddresses = (current.addresses || []).filter(a => a.id !== addressId);
+          const current = cached.find((c) => c.id === customer.id) || customer;
+          const updatedAddresses = (current.addresses || []).filter((a) => a.id !== addressId);
           const updatedCustomer = { ...current, addresses: updatedAddresses };
           await saveCustomer(updatedCustomer);
 
@@ -206,23 +249,19 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         } catch (offlineErr) {
           console.warn('Failed to cache delete address offline:', offlineErr);
         }
-        setAddresses(prev => prev.filter(a => a.id !== addressId));
+        setOfflineAddresses((prev) => prev.filter((a) => a.id !== addressId));
         showSuccess('Address removed offline. It will sync when back online.');
         if (onAddressUpdate) onAddressUpdate();
       } else {
         console.log('[AddressModal] Online delete starting', { addressId, customerId: customer.id });
-        await customerAPI.deleteAddress(addressId);
+        await deleteAddressMutation.mutateAsync({ addressId, customerId: customer.id });
         console.log('[AddressModal] Online delete response success', { addressId });
 
-        // Update local state immediately
-        setAddresses(prev => prev.filter(a => a.id !== addressId));
-
-        // Update cached customer for offline use
         try {
           const { saveCustomer, getCachedCustomers } = await import('../utils/offlineDB');
           const cached = await getCachedCustomers();
-          const current = cached.find(c => c.id === customer.id) || customer;
-          const updatedAddresses = (current.addresses || []).filter(a => a.id !== addressId);
+          const current = cached.find((c) => c.id === customer.id) || customer;
+          const updatedAddresses = (current.addresses || []).filter((a) => a.id !== addressId);
           const updatedCustomer = { ...current, addresses: updatedAddresses };
           await saveCustomer(updatedCustomer);
           console.log('[AddressModal] Cached customer updated after online delete', { addressId, customerId: customer.id });
@@ -230,9 +269,6 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
           console.warn('Failed to update cached customer after delete:', cacheErr);
         }
 
-        // Reload to ensure fresh list from API
-        await loadAddresses();
-        console.log('[AddressModal] Reloaded addresses after delete');
         showSuccess('Address deleted successfully');
         if (onAddressUpdate) {
           onAddressUpdate();
@@ -249,20 +285,16 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 
   const handleSetDefault = async (addressId) => {
     try {
-      const customerIdStr = String(customer.id ?? '');
-      const isOfflineId = typeof customer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
-
       if (!navigator.onLine || isOfflineId) {
-        // Offline set default: update local state and queue sync
-        const updated = addresses.map(addr => ({
+        const updated = addresses.map((addr) => ({
           ...addr,
           isDefault: addr.id === addressId
         }));
-        setAddresses(updated);
+        setOfflineAddresses(updated);
         try {
           const { saveCustomer, addPendingOperation, getCachedCustomers } = await import('../utils/offlineDB');
           const cached = await getCachedCustomers();
-          const current = cached.find(c => c.id === customer.id) || customer;
+          const current = cached.find((c) => c.id === customer.id) || customer;
           const updatedCustomer = { ...current, addresses: updated };
           await saveCustomer(updatedCustomer);
           await addPendingOperation({
@@ -280,9 +312,12 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
         return;
       }
 
-      await customerAPI.updateAddress(addressId, { isDefault: true });
+      await updateAddressMutation.mutateAsync({
+        addressId,
+        data: { isDefault: true },
+        customerId: customer.id
+      });
       console.log('[AddressModal] Online set default success', { addressId, customerId: customer.id });
-      await loadAddresses();
       showSuccess('Default address updated');
       if (onAddressUpdate) {
         onAddressUpdate();
@@ -295,7 +330,7 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 
   if (!isOpen) return null;
 
-  const defaultAddress = addresses.find(addr => addr.isDefault) || addresses[0];
+  const defaultAddress = addresses.find((addr) => addr.isDefault) || addresses[0];
 
   return (
     <>
@@ -340,13 +375,16 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
             </button>
           </div>
 
-          {loading ? (
+          {shouldFetch && addressesQuery.isError && addresses.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: '#dc3545' }}>
+              Failed to load addresses
+            </div>
+          ) : loading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#6c757d' }}>
               Loading addresses...
             </div>
           ) : (
             <>
-              {/* Default Address Display */}
               {defaultAddress && (
                 <div style={{
                   padding: '1rem',
@@ -404,14 +442,13 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                 </div>
               )}
 
-              {/* Other Addresses */}
-              {addresses.filter(addr => !addr.isDefault).length > 0 && (
+              {addresses.filter((addr) => !addr.isDefault).length > 0 && (
                 <div style={{ marginBottom: '1.5rem' }}>
                   <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: '#495057' }}>
-                    Other Addresses ({addresses.filter(addr => !addr.isDefault).length})
+                    Other Addresses ({addresses.filter((addr) => !addr.isDefault).length})
                   </h3>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {addresses.filter(addr => !addr.isDefault).map((addr) => (
+                    {addresses.filter((addr) => !addr.isDefault).map((addr) => (
                       <div
                         key={addr.id}
                         style={{
@@ -488,7 +525,6 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
                 </div>
               )}
 
-              {/* Add New Address Form */}
               {!showAddForm ? (
                 <button
                   type="button"
@@ -655,5 +691,3 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
 };
 
 export default CustomerAddressModal;
-
-

@@ -140,8 +140,8 @@ const DateRangeFilter = ({
             className={`preset-btn ${activePreset === preset.key ? 'active' : ''} ${preset.key === 'custom' && showCustom ? 'active' : ''}`}
             onClick={() => {
               if (preset.key === 'custom') {
-                setShowCustom(!showCustom);
                 setActivePreset('');
+                setShowCustom(true);
               } else {
                 applyPreset(preset.key);
               }

@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { authAPI } from '../services/api';
+import { FaEye, FaEyeSlash } from 'react-icons/fa';
+import { getPublicAssetUrl } from '../utils/publicAssetUrl';
 import './Login.css';
 
 const Login = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('manager');
-  const [password, setPassword] = useState('manager123');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const logoUrl = getPublicAssetUrl('logo.png');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -51,7 +55,7 @@ const Login = ({ onLoginSuccess }) => {
     <div className="login-container">
       <div className="login-box">
         <div className="login-header">
-          <img src="/logo.png" alt="Logo" className="login-logo" />
+          <img src={logoUrl} alt="Logo" className="login-logo" />
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
@@ -72,18 +76,28 @@ const Login = ({ onLoginSuccess }) => {
 
           <div className="form-group">
             <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              required
-            />
+            <div className="password-input-wrapper">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                id="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <FaEyeSlash /> : <FaEye />}
+              </button>
+            </div>
           </div>
 
           <button type="submit" className="login-button" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Processing...' : 'Sign In'}
           </button>
         </form>
 

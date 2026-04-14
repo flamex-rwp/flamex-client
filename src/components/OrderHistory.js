@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -7,6 +7,41 @@ import { useOffline } from '../contexts/OfflineContext';
 import OfflineModal from './OfflineModal';
 import jsPDF from 'jspdf';
 import { printReceipt } from './Receipt';
+import ConfirmationModal from './ConfirmationModal';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import ScreenLoading from './ScreenLoading';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter,
+  sanitizeOrderHistoryOrderType,
+  sanitizeOrderHistoryPaymentStatus,
+  sanitizeOrderHistoryPaymentMethod,
+  sanitizeOrderHistoryOrderStatus,
+  sanitizeOrderHistorySortBy,
+  sanitizeOrderHistorySearch
+} from '../utils/filterSessionPersistence';
+import {
+  FaClipboard,
+  FaUtensils,
+  FaTruck,
+  FaMoneyBillWave,
+  FaUniversity,
+  FaSearch,
+  FaFilePdf,
+  FaTimes,
+  FaChevronDown,
+  FaChevronRight,
+  FaReceipt,
+  FaUser,
+  FaPhone,
+  FaMapMarkerAlt,
+  FaCopy,
+  FaExclamationTriangle,
+  FaCoins
+} from 'react-icons/fa';
 
 dayjs.extend(relativeTime);
 
@@ -16,35 +51,98 @@ const formatCurrency = (value) => {
   return `PKR ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 };
 
+/** Dine-in: completed or cancelled; delivery: paid+delivered or cancelled — default Order History view. */
+const isHistoryCompleteOrder = (order) => {
+  const orderType = order.orderType || order.order_type || 'dine_in';
+  const orderStatus = (order.orderStatus || order.order_status || 'pending').toLowerCase();
+  const paymentStatus = (order.paymentStatus || order.payment_status || 'pending').toLowerCase();
+  const deliveryStatus = (order.deliveryStatus || order.delivery_status || 'pending').toLowerCase();
+
+  if (orderStatus === 'cancelled') {
+    return true;
+  }
+
+  if (orderType === 'delivery') {
+    const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid' || paymentStatus === 'complete';
+    const isDelivered = deliveryStatus === 'delivered';
+    return isPaid && isDelivered;
+  }
+
+  return orderStatus === 'completed';
+};
+
 const OrderHistory = () => {
   const { showSuccess, showError } = useToast();
   const { online } = useOffline();
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
+  const initialScreenFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.orderHistory);
+    if (!s) {
+      return {
+        dateFilter: 'today',
+        startDate: null,
+        endDate: null,
+        showCustomRange: false,
+        orderTypeFilter: 'all',
+        searchTerm: '',
+        paymentStatusFilter: 'all',
+        paymentMethodFilter: 'all',
+        orderStatusFilter: 'all',
+        sortBy: 'date_desc'
+      };
+    }
+    return {
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange),
+      orderTypeFilter: sanitizeOrderHistoryOrderType(s.orderTypeFilter),
+      searchTerm: sanitizeOrderHistorySearch(s.searchTerm),
+      paymentStatusFilter: sanitizeOrderHistoryPaymentStatus(s.paymentStatusFilter),
+      paymentMethodFilter: sanitizeOrderHistoryPaymentMethod(s.paymentMethodFilter),
+      orderStatusFilter: sanitizeOrderHistoryOrderStatus(s.orderStatusFilter),
+      sortBy: sanitizeOrderHistorySortBy(s.sortBy)
+    };
+  }, []);
+
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedOrdersOnceRef = useRef(false);
   const [error, setError] = useState('');
-  const [dateFilter, setDateFilter] = useState('today');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [dateFilter, setDateFilter] = useState(initialScreenFilters.dateFilter);
+  const [startDate, setStartDate] = useState(initialScreenFilters.startDate);
+  const [endDate, setEndDate] = useState(initialScreenFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialScreenFilters.showCustomRange);
   const [expandedOrderId, setExpandedOrderId] = useState(null);
   const [orderDetails, setOrderDetails] = useState(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [generatingReceiptId, setGeneratingReceiptId] = useState(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: null,
+    variant: 'danger'
+  });
   // New filters
-  const [orderTypeFilter, setOrderTypeFilter] = useState('all'); // 'all', 'dine_in', 'delivery'
-  const [searchTerm, setSearchTerm] = useState('');
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState('all'); // 'all', 'pending', 'completed'
-  const [paymentMethodFilter, setPaymentMethodFilter] = useState('all'); // 'all', 'cash', 'bank_transfer'
-  const [orderStatusFilter, setOrderStatusFilter] = useState('all'); // 'all', 'pending', 'preparing', 'ready', 'delivered', 'completed'
-  const [sortBy, setSortBy] = useState('date_desc'); // 'date_desc', 'date_asc', 'amount_asc', 'amount_desc', 'order_number_asc', 'order_number_desc'
+  const [orderTypeFilter, setOrderTypeFilter] = useState(initialScreenFilters.orderTypeFilter); // 'all', 'dine_in', 'delivery'
+  const [searchTerm, setSearchTerm] = useState(initialScreenFilters.searchTerm);
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState(initialScreenFilters.paymentStatusFilter); // 'all', 'pending', 'completed'
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState(initialScreenFilters.paymentMethodFilter); // 'all', 'cash', 'bank_transfer'
+  const [orderStatusFilter, setOrderStatusFilter] = useState(initialScreenFilters.orderStatusFilter); // 'all', 'pending', 'preparing', 'ready', 'delivered', 'completed'
+  const [sortBy, setSortBy] = useState(initialScreenFilters.sortBy); // 'date_desc', 'date_asc', 'amount_asc', 'amount_desc', 'order_number_asc', 'order_number_desc'
   const [searchDebounce, setSearchDebounce] = useState(null);
-  const [stats, setStats] = useState({
+  const emptyStats = {
     dine_in: {
       total_orders: 0,
       total_revenue: 0,
       avg_order_value: 0,
       completed_orders: 0,
       completed_revenue: 0,
+      cancelled_orders: 0,
+      cancelled_revenue: 0,
       cash_orders: 0,
       cash_revenue: 0,
       bank_orders: 0,
@@ -56,6 +154,8 @@ const OrderHistory = () => {
       avg_order_value: 0,
       completed_orders: 0,
       completed_revenue: 0,
+      cancelled_orders: 0,
+      cancelled_revenue: 0,
       cash_orders: 0,
       cash_revenue: 0,
       bank_orders: 0,
@@ -65,81 +165,306 @@ const OrderHistory = () => {
       total_orders: 0,
       total_revenue: 0,
       avg_order_value: 0,
+      completed_orders: 0,
+      completed_revenue: 0,
+      cancelled_orders: 0,
+      cancelled_revenue: 0,
       cash_orders: 0,
       cash_revenue: 0,
       bank_orders: 0,
       bank_revenue: 0
     }
-  });
+  };
+
+  const [stats, setStats] = useState(emptyStats);
 
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      // 1. Prepare params for GET /api/orders (List)
-      const listParams = {
-        filter: dateFilter,
-        // Backend expects startDate/endDate for list filtering
-        startDate: startDate,
-        startDate: startDate,
-        endDate: endDate,
-        limit: 10000 // Get all orders for the period to fix history view and PDF export
-      };
+      // Fetch order history from backend (business day 3am->3am PKT, completed+cancelled only).
+      // The endpoint supports default (today) or custom business-day ranges.
+      let historyParams = {};
+      if (dateFilter === 'custom' && startDate && endDate) {
+        historyParams = {
+          filter: 'custom',
+          startDate: dayjs(startDate).format('YYYY-MM-DD'),
+          endDate: dayjs(endDate).format('YYYY-MM-DD'),
+        };
+      } else if (dateFilter === 'yesterday') {
+        const d = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        historyParams = { filter: 'custom', startDate: d, endDate: d };
+      } else if (dateFilter === 'this_week') {
+        historyParams = {
+          filter: 'custom',
+          startDate: dayjs().startOf('week').format('YYYY-MM-DD'),
+          endDate: dayjs().format('YYYY-MM-DD'),
+        };
+      } else if (dateFilter === 'this_month') {
+        historyParams = {
+          filter: 'custom',
+          startDate: dayjs().startOf('month').format('YYYY-MM-DD'),
+          endDate: dayjs().format('YYYY-MM-DD'),
+        };
+      } else if (dateFilter === 'custom') {
+        // Custom selected without dates: treat as today (backend default)
+        historyParams = {};
+      } else {
+        // today/default: no params
+        historyParams = {};
+      }
 
-      if (orderTypeFilter !== 'all') listParams.orderType = orderTypeFilter;
-      if (searchTerm.trim()) listParams.search = searchTerm.trim();
-      if (paymentStatusFilter !== 'all') listParams.paymentStatus = paymentStatusFilter;
-      if (paymentMethodFilter !== 'all') listParams.paymentMethod = paymentMethodFilter;
-      if (orderStatusFilter !== 'all') listParams.orderStatus = orderStatusFilter;
-      if (sortBy) listParams.sort_by = sortBy;
+      const historyResponse = await ordersAPI.getOrdersHistory(historyParams);
 
-      // 2. Prepare params for GET /api/orders/statistics/summary (Stats)
-      // Backend expects start/end for stats if custom range, or filter string
-      const statsParams = {
-        filter: dateFilter,
-        start: startDate,
-        end: endDate
-      };
+      // Handle History Response: expect { success, data: { range, stats, orders } }
+      // but keep fallbacks for other wrappers.
+      const historyPayload = historyResponse.data;
+      let ordersArray = [];
 
-      // Execute both requests in parallel
-      const [listResponse, statsResponse] = await Promise.all([
-        ordersAPI.getAll(listParams),
-        ordersAPI.getOrderStatistics(statsParams)
-      ]);
+      if (historyPayload) {
+        const maybeData = historyPayload.data ?? historyPayload;
+        const maybeOrders = maybeData?.orders ?? maybeData?.data?.orders ?? maybeData?.data ?? maybeData;
+        if (Array.isArray(maybeOrders)) {
+          ordersArray = maybeOrders;
+        }
+      }
 
-      // Handle List Response
-      const listData = listResponse.data.data || listResponse.data;
-      const filteredOrders = (listData.orders || listData || []).filter(
-        order => order.payment_status !== 'pending'
-      );
-      setOrders(filteredOrders);
+      // Additional filters should work locally (backend already returns completed+cancelled within business-day window)
+      let listBaseOrders = ordersArray;
+      if (orderTypeFilter !== 'all') {
+        listBaseOrders = listBaseOrders.filter((o) => (o.orderType || o.order_type || 'dine_in') === orderTypeFilter);
+      }
+      if (paymentMethodFilter !== 'all') {
+        listBaseOrders = listBaseOrders.filter((o) => {
+          const method = (o.paymentMethod || o.payment_method || '').toLowerCase();
+          return method === paymentMethodFilter;
+        });
+      }
+      if (orderStatusFilter !== 'all') {
+        listBaseOrders = listBaseOrders.filter((o) => {
+          const status = (o.orderStatus || o.order_status || o.status || '').toLowerCase();
+          return status === orderStatusFilter;
+        });
+      }
+      if (paymentStatusFilter !== 'all') {
+        listBaseOrders = listBaseOrders.filter((o) => {
+          const ps = (o.paymentStatus || o.payment_status || 'pending').toLowerCase();
+          const os = (o.orderStatus || o.order_status || o.status || 'pending').toLowerCase();
+          if (paymentStatusFilter === 'cancelled') return os === 'cancelled' || ps === 'cancelled';
+          if (paymentStatusFilter === 'completed') return ps === 'completed' || ps === 'paid' || ps === 'complete';
+          if (paymentStatusFilter === 'pending') return !(ps === 'completed' || ps === 'paid' || ps === 'complete') && os !== 'cancelled';
+          return true;
+        });
+      }
 
-      // Handle Stats Response
-      const statsData = statsResponse.data.data || statsResponse.data || {};
+      // Search locally across all fields shown in placeholder:
+      // order number, table number, customer name, phone, address.
+      // Also supports table formats like: "table #1", "table 1", "#1".
+      let finalOrders = listBaseOrders;
+      if (searchTerm && searchTerm.trim()) {
+        const term = searchTerm.trim().toLowerCase();
+        const normalizedTerm = term.replace(/\s+/g, ' ').trim();
+        const numericTerm = normalizedTerm.replace(/[^0-9]/g, '');
+        const tableNumericTerm = normalizedTerm
+          .replace(/table/gi, '')
+          .replace(/#/g, '')
+          .replace(/[^0-9]/g, '');
 
-      // Transform flat stats to nested structure expected by rendering
-      // Backend returns: { totalOrders, totalRevenue, dineInOrders, deliveryOrders, cashRevenue, bankRevenue, pendingOrders }
-      setStats({
-        dine_in: {
-          total_orders: statsData.dineInOrders || 0,
-          total_revenue: statsData.dineInRevenue || 0,
-          avg_order_value: statsData.dineInOrders ? (statsData.dineInRevenue / statsData.dineInOrders) : 0,
-        },
-        delivery: {
-          total_orders: statsData.deliveryOrders || 0,
-          total_revenue: statsData.deliveryRevenue || 0,
-          avg_order_value: statsData.deliveryOrders ? (statsData.deliveryRevenue / statsData.deliveryOrders) : 0,
-        },
-        combined: {
-          total_orders: statsData.totalOrders || 0,
-          total_revenue: statsData.totalRevenue || 0,
-          avg_order_value: statsData.totalOrders ? (statsData.totalRevenue / statsData.totalOrders) : 0,
-          cash_orders: statsData.cashOrdersCount || 0,
-          cash_revenue: statsData.cashRevenue || 0,
-          bank_orders: statsData.bankOrdersCount || 0,
-          bank_revenue: statsData.bankRevenue || 0
+        finalOrders = listBaseOrders
+          .map((order, index) => {
+            const rawOrderNumber =
+              order.order_number !== undefined && order.order_number !== null
+                ? order.order_number
+                : order.orderNumber !== undefined && order.orderNumber !== null
+                  ? order.orderNumber
+                  : order.id;
+
+            const orderNumberStr =
+              rawOrderNumber !== undefined && rawOrderNumber !== null
+                ? String(rawOrderNumber).toLowerCase()
+                : '';
+
+            const rawTableNumber = order.table_number ?? order.tableNumber ?? '';
+            const tableNumberStr = rawTableNumber !== null && rawTableNumber !== undefined
+              ? String(rawTableNumber).toLowerCase()
+              : '';
+            const tableLabelStr = tableNumberStr ? `table #${tableNumberStr}` : '';
+
+            const customerName = String(
+              order.customer_name ??
+              order.customerName ??
+              order.delivery_name ??
+              order.deliveryName ??
+              ''
+            ).toLowerCase();
+
+            const phone = String(
+              order.customer_phone ??
+              order.customerPhone ??
+              order.delivery_phone ??
+              order.deliveryPhone ??
+              ''
+            ).toLowerCase();
+
+            const address = String(
+              order.delivery_address ??
+              order.deliveryAddress ??
+              order.address ??
+              ''
+            ).toLowerCase();
+
+            const searchableFields = [
+              orderNumberStr,
+              tableNumberStr,
+              tableLabelStr,
+              customerName,
+              phone,
+              address
+            ];
+
+            const isMatch = searchableFields.some((value) => value.includes(normalizedTerm))
+              || (numericTerm && orderNumberStr.includes(numericTerm))
+              || (tableNumericTerm && tableNumberStr.includes(tableNumericTerm));
+
+            if (!isMatch) return null;
+
+            // Ranking: exact order number first, then starts-with order number,
+            // then exact table, then contains match in other fields.
+            let rank = 4;
+            if (orderNumberStr && orderNumberStr === numericTerm) {
+              rank = 0;
+            } else if (orderNumberStr && numericTerm && orderNumberStr.startsWith(numericTerm)) {
+              rank = 1;
+            } else if (tableNumericTerm && tableNumberStr === tableNumericTerm) {
+              rank = 2;
+            } else if (searchableFields.some((value) => value.startsWith(normalizedTerm))) {
+              rank = 3;
+            }
+
+            return { order, rank, index };
+          })
+          .filter(Boolean)
+          .sort((a, b) => {
+            if (a.rank !== b.rank) return a.rank - b.rank;
+            // Preserve original (backend) ordering within same rank
+            return a.index - b.index;
+          })
+          .map(x => x.order);
+      }
+
+      // Local sort (backend history ordering is unspecified)
+      const sortedFinalOrders = [...finalOrders];
+      if (sortBy === 'date_asc') {
+        sortedFinalOrders.sort((a, b) => new Date(a.created_at || a.createdAt || 0) - new Date(b.created_at || b.createdAt || 0));
+      } else if (sortBy === 'amount_asc') {
+        sortedFinalOrders.sort((a, b) => (Number(a.totalAmount || a.total_amount || 0) - Number(b.totalAmount || b.total_amount || 0)));
+      } else if (sortBy === 'amount_desc') {
+        sortedFinalOrders.sort((a, b) => (Number(b.totalAmount || b.total_amount || 0) - Number(a.totalAmount || a.total_amount || 0)));
+      } else if (sortBy === 'order_number_asc') {
+        sortedFinalOrders.sort((a, b) => String(a.order_number ?? a.orderNumber ?? '').localeCompare(String(b.order_number ?? b.orderNumber ?? ''), undefined, { numeric: true }));
+      } else if (sortBy === 'order_number_desc') {
+        sortedFinalOrders.sort((a, b) => String(b.order_number ?? b.orderNumber ?? '').localeCompare(String(a.order_number ?? a.orderNumber ?? ''), undefined, { numeric: true }));
+      } else {
+        // date_desc default
+        sortedFinalOrders.sort((a, b) => new Date(b.created_at || b.createdAt || 0) - new Date(a.created_at || a.createdAt || 0));
+      }
+
+      console.log('📋 [OrderHistory] Filtered orders - Total:', ordersArray.length, 'List base:', listBaseOrders.length);
+      setOrders(sortedFinalOrders);
+
+      // Calculate stats from orders (client-side calculation)
+      const calculatedStats = JSON.parse(JSON.stringify(emptyStats));
+
+      const statsSource = listBaseOrders;
+
+      statsSource.forEach(order => {
+        const amount = parseFloat(order.totalAmount || order.total_amount || 0);
+        const orderType = order.orderType || order.order_type || 'dine_in';
+        const orderStatus = (order.orderStatus || order.order_status || 'pending').toLowerCase();
+        const paymentMethod = order.paymentMethod || order.payment_method || 'cash';
+
+        const isCancelled = orderStatus === 'cancelled';
+        const revenueAmount = isCancelled ? 0 : amount;
+
+        // Combined stats
+        calculatedStats.combined.total_orders += 1;
+        calculatedStats.combined.total_revenue += revenueAmount;
+        if (isCancelled) {
+          calculatedStats.combined.cancelled_orders += 1;
+          calculatedStats.combined.cancelled_revenue += amount;
+        }
+
+        if (paymentMethod === 'cash') {
+          calculatedStats.combined.cash_orders += 1;
+          calculatedStats.combined.cash_revenue += revenueAmount;
+        } else if (paymentMethod === 'bank_transfer') {
+          calculatedStats.combined.bank_orders += 1;
+          calculatedStats.combined.bank_revenue += revenueAmount;
+        }
+
+        // Order type specific stats
+        if (orderType === 'dine_in') {
+          calculatedStats.dine_in.total_orders += 1;
+          calculatedStats.dine_in.total_revenue += revenueAmount;
+
+          if (paymentMethod === 'cash') {
+            calculatedStats.dine_in.cash_orders += 1;
+            calculatedStats.dine_in.cash_revenue += revenueAmount;
+          } else if (paymentMethod === 'bank_transfer') {
+            calculatedStats.dine_in.bank_orders += 1;
+            calculatedStats.dine_in.bank_revenue += revenueAmount;
+          }
+
+          if (isCancelled) {
+            calculatedStats.dine_in.cancelled_orders += 1;
+            calculatedStats.dine_in.cancelled_revenue += amount;
+          } else if (orderStatus === 'completed') {
+            calculatedStats.dine_in.completed_orders += 1;
+            calculatedStats.dine_in.completed_revenue += amount;
+          }
+        } else if (orderType === 'delivery') {
+          calculatedStats.delivery.total_orders += 1;
+          calculatedStats.delivery.total_revenue += revenueAmount;
+
+          if (paymentMethod === 'cash') {
+            calculatedStats.delivery.cash_orders += 1;
+            calculatedStats.delivery.cash_revenue += revenueAmount;
+          } else if (paymentMethod === 'bank_transfer') {
+            calculatedStats.delivery.bank_orders += 1;
+            calculatedStats.delivery.bank_revenue += revenueAmount;
+          }
+
+          const deliveryStatus = (order.deliveryStatus || order.delivery_status || 'pending').toLowerCase();
+          const paymentStatus = (order.paymentStatus || order.payment_status || 'pending').toLowerCase();
+          const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid' || paymentStatus === 'complete';
+          const isDelivered = deliveryStatus === 'delivered';
+
+          if (isCancelled) {
+            calculatedStats.delivery.cancelled_orders += 1;
+            calculatedStats.delivery.cancelled_revenue += amount;
+          } else if (isPaid && isDelivered) {
+            calculatedStats.delivery.completed_orders += 1;
+            calculatedStats.delivery.completed_revenue += amount;
+          }
         }
       });
+
+      // Calculate combined completed orders
+      calculatedStats.combined.completed_orders = calculatedStats.dine_in.completed_orders + calculatedStats.delivery.completed_orders;
+      calculatedStats.combined.completed_revenue = calculatedStats.dine_in.completed_revenue + calculatedStats.delivery.completed_revenue;
+
+      // Calculate averages
+      calculatedStats.dine_in.avg_order_value = calculatedStats.dine_in.total_orders > 0
+        ? calculatedStats.dine_in.total_revenue / calculatedStats.dine_in.total_orders
+        : 0;
+      calculatedStats.delivery.avg_order_value = calculatedStats.delivery.total_orders > 0
+        ? calculatedStats.delivery.total_revenue / calculatedStats.delivery.total_orders
+        : 0;
+      calculatedStats.combined.avg_order_value = calculatedStats.combined.total_orders > 0
+        ? calculatedStats.combined.total_revenue / calculatedStats.combined.total_orders
+        : 0;
+
+      setStats(calculatedStats);
 
     } catch (err) {
       console.error('Failed to load order history', err);
@@ -149,15 +474,12 @@ const OrderHistory = () => {
       } else {
         // Network error - cache should have handled it, set empty data gracefully
         setOrders([]);
-        setStats({
-          dine_in: { total_orders: 0, total_revenue: 0, avg_order_value: 0, completed_orders: 0, completed_revenue: 0, cash_orders: 0, cash_revenue: 0, bank_orders: 0, bank_revenue: 0 },
-          delivery: { total_orders: 0, total_revenue: 0, avg_order_value: 0, completed_orders: 0, completed_revenue: 0, cash_orders: 0, cash_revenue: 0, bank_orders: 0, bank_revenue: 0 },
-          combined: { total_orders: 0, total_revenue: 0, avg_order_value: 0, cash_orders: 0, cash_revenue: 0, bank_orders: 0, bank_revenue: 0 }
-        });
+        setStats(emptyStats);
         setError(''); // Clear error for network issues
       }
     } finally {
       setLoading(false);
+      hasLoadedOrdersOnceRef.current = true;
     }
   }, [dateFilter, startDate, endDate, orderTypeFilter, searchTerm, paymentStatusFilter, paymentMethodFilter, orderStatusFilter, sortBy]);
 
@@ -183,16 +505,36 @@ const OrderHistory = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTerm]);
 
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.orderHistory, {
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange,
+      orderTypeFilter,
+      searchTerm,
+      paymentStatusFilter,
+      paymentMethodFilter,
+      orderStatusFilter,
+      sortBy
+    });
+  }, [
+    dateFilter,
+    startDate,
+    endDate,
+    showCustomRange,
+    orderTypeFilter,
+    searchTerm,
+    paymentStatusFilter,
+    paymentMethodFilter,
+    orderStatusFilter,
+    sortBy
+  ]);
+
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      } else {
-        setDateFilter('today');
-        setStartDate(null);
-        setEndDate(null);
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
       setDateFilter(filter);
       setStartDate(null);
@@ -207,6 +549,107 @@ const OrderHistory = () => {
     setDateFilter('custom');
     setShowCustomRange(false);
   };
+
+  const resetDateFilter = useCallback(() => {
+    setDateFilter('today');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(false);
+  }, []);
+
+  const clearAppliedCustomRange = useCallback(() => {
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
+
+  const clearAllOrderFilters = useCallback(() => {
+    resetDateFilter();
+    setOrderTypeFilter('all');
+    setSearchTerm('');
+    setPaymentStatusFilter('all');
+    setPaymentMethodFilter('all');
+    setOrderStatusFilter('all');
+    setSortBy('date_desc');
+  }, [resetDateFilter]);
+
+  const appliedFilterItems = useMemo(() => {
+    const items = [];
+    if (isCustomDateRangeApplied(dateFilter, startDate, endDate)) {
+      items.push({
+        id: 'date',
+        label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+        onRemove: clearAppliedCustomRange
+      });
+    }
+    if (orderTypeFilter !== 'all') {
+      items.push({
+        id: 'orderType',
+        label: `Order type: ${orderTypeFilter === 'dine_in' ? 'Dine-in' : 'Delivery'}`,
+        onRemove: () => setOrderTypeFilter('all')
+      });
+    }
+    const trimmedSearch = searchTerm.trim();
+    if (trimmedSearch) {
+      const display = trimmedSearch.length > 48 ? `${trimmedSearch.slice(0, 45)}…` : trimmedSearch;
+      items.push({
+        id: 'search',
+        label: `Search: ${display}`,
+        onRemove: () => setSearchTerm('')
+      });
+    }
+    if (paymentStatusFilter !== 'all') {
+      const paymentLabel =
+        { pending: 'Pending', completed: 'Paid', cancelled: 'Cancelled' }[paymentStatusFilter] ||
+        paymentStatusFilter;
+      items.push({
+        id: 'paymentStatus',
+        label: `Payment status: ${paymentLabel}`,
+        onRemove: () => setPaymentStatusFilter('all')
+      });
+    }
+    if (paymentMethodFilter !== 'all') {
+      items.push({
+        id: 'paymentMethod',
+        label: `Payment method: ${paymentMethodFilter === 'cash' ? 'Cash' : 'Bank transfer'}`,
+        onRemove: () => setPaymentMethodFilter('all')
+      });
+    }
+    if (orderStatusFilter !== 'all') {
+      items.push({
+        id: 'orderStatus',
+        label: `Order status: ${orderStatusFilter.replace(/_/g, ' ')}`,
+        onRemove: () => setOrderStatusFilter('all')
+      });
+    }
+    if (sortBy !== 'date_desc') {
+      const sortLabels = {
+        date_asc: 'Date (oldest first)',
+        order_number_desc: 'Order # (high to low)',
+        order_number_asc: 'Order # (low to high)',
+        amount_desc: 'Amount (high to low)',
+        amount_asc: 'Amount (low to high)'
+      };
+      items.push({
+        id: 'sort',
+        label: `Sort: ${sortLabels[sortBy] || sortBy.replace(/_/g, ' ')}`,
+        onRemove: () => setSortBy('date_desc')
+      });
+    }
+    return items;
+  }, [
+    dateFilter,
+    startDate,
+    endDate,
+    orderTypeFilter,
+    searchTerm,
+    paymentStatusFilter,
+    paymentMethodFilter,
+    orderStatusFilter,
+    sortBy,
+    clearAppliedCustomRange
+  ]);
 
   const fetchOrderDetails = async (orderId) => {
     if (expandedOrderId === orderId && orderDetails) {
@@ -393,7 +836,11 @@ const OrderHistory = () => {
       // Prepare receipt data - ensure all required fields are present
       const receiptDataForPrint = {
         id: fullOrder.id,
-        order_number: fullOrder.order_number || order.order_number,
+        order_number:
+          fullOrder.order_number
+          || fullOrder.orderNumber
+          || order.order_number
+          || order.orderNumber,
         table_number: fullOrder.table_number || order.table_number,
         items: orderItems.map(item => ({
           name: item.menuItem?.name || item.item_name || item.name || 'Unknown Item',
@@ -437,13 +884,41 @@ const OrderHistory = () => {
       // Print customer receipt using JavaScript-controlled printing
       printReceipt(receiptDataForPrint, 'customer');
 
-      showSuccess(`Receipt generated for Order #${fullOrder.order_number || fullOrder.id}`);
+      showSuccess(
+        `Receipt generated for Order #${fullOrder.order_number || fullOrder.orderNumber || fullOrder.id}`
+      );
     } catch (err) {
       console.error('Failed to generate receipt', err);
       showError(err.formattedMessage || err.response?.data?.error || 'Failed to generate receipt. Please try again.');
     } finally {
       setGeneratingReceiptId(null);
     }
+  };
+
+  // Handle order cancellation
+  const handleCancelOrder = async (orderId) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Cancel Order',
+      message: 'Are you sure you want to cancel this order? This action cannot be undone. All order statuses will be set to cancelled.',
+      onConfirm: async () => {
+        setCancellingOrderId(orderId);
+        try {
+          await ordersAPI.cancelOrder(orderId);
+          showSuccess('Order cancelled successfully');
+
+          // Refresh orders to show updated status
+          await fetchOrders();
+        } catch (err) {
+          console.error('Failed to cancel order', err);
+          showError(err.formattedMessage || err.response?.data?.error || 'Failed to cancel order');
+        } finally {
+          setCancellingOrderId(null);
+          setConfirmModal({ ...confirmModal, isOpen: false });
+        }
+      },
+      variant: 'danger'
+    });
   };
 
   // Export all filtered orders to PDF
@@ -555,7 +1030,11 @@ const OrderHistory = () => {
           // Order Header
           doc.setFontSize(11);
           doc.setFont('helvetica', 'bold');
-          doc.text(`Order #${order.order_number || order.id} - ${order.order_type === 'delivery' ? 'Delivery' : 'Dine-In'}`, margin, yPosition);
+          doc.text(
+            `Order #${order.order_number || order.orderNumber || order.id} - ${order.order_type === 'delivery' ? 'Delivery' : 'Dine-In'}`,
+            margin,
+            yPosition
+          );
           yPosition += lineHeight;
 
           doc.setFontSize(9);
@@ -639,31 +1118,36 @@ const OrderHistory = () => {
   };
 
   // Show offline modal if offline
-  if (!online) {
+  if (!online && !isElectron) {
     return <OfflineModal title="Order History - Offline" />;
   }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold' }}>📋 Order History</h1>
+        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaClipboard /> Order History</h1>
 
         {/* Summary Cards - Comparison */}
         <style>{`
           .summary-cards-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 1rem;
             margin-bottom: 2rem;
           }
-          @media (min-width: 1200px) {
+          @media (min-width: 768px) {
             .summary-cards-grid {
-              grid-template-columns: repeat(6, 1fr);
+              grid-template-columns: repeat(3, 1fr);
             }
           }
-          @media (max-width: 768px) {
+          @media (min-width: 1024px) {
             .summary-cards-grid {
-              grid-template-columns: repeat(2, 1fr);
+              grid-template-columns: repeat(4, 1fr);
+            }
+          }
+          @media (min-width: 1400px) {
+            .summary-cards-grid {
+              grid-template-columns: repeat(6, 1fr);
             }
           }
           @media (max-width: 480px) {
@@ -685,12 +1169,27 @@ const OrderHistory = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Total Orders</div>
-            <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, marginBottom: '0.5rem' }}>Total Orders</div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.75rem' }}>
               {stats.combined.total_orders || stats.combined.totalOrders || 0}
             </div>
-            <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>
-              Avg: {formatCurrency(stats.combined.avg_order_value || stats.combined.avgOrderValue || 0)}
+            <div style={{
+              fontSize: '0.85rem',
+              opacity: 0.95,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.25rem',
+              paddingTop: '0.5rem',
+              borderTop: '1px solid rgba(255,255,255,0.2)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Completed:</span>
+                <span style={{ fontWeight: '600' }}>{stats.combined.completed_orders || stats.combined.completedOrders || 0}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Cancelled:</span>
+                <span style={{ fontWeight: '600' }}>{stats.combined.cancelled_orders || stats.combined.cancelledOrders || 0}</span>
+              </div>
             </div>
           </div>
 
@@ -727,7 +1226,7 @@ const OrderHistory = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🍽️ Dine-In Orders</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaUtensils /> Dine-In Orders</div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.dine_in.total_orders || stats.dine_in.totalOrders || 0}
             </div>
@@ -748,7 +1247,7 @@ const OrderHistory = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🚚 Delivery Orders</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaTruck /> Delivery Orders</div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.delivery.total_orders || stats.delivery.totalOrders || 0}
             </div>
@@ -769,7 +1268,7 @@ const OrderHistory = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>💵 Cash Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaMoneyBillWave /> Cash Payments</div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.combined.cash_orders || stats.combined.cashOrders || 0}
             </div>
@@ -790,7 +1289,9 @@ const OrderHistory = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🏦 Bank Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <FaUniversity /> Bank Payments
+            </div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.combined.bank_orders || stats.combined.bankOrders || 0}
             </div>
@@ -960,20 +1461,6 @@ const OrderHistory = () => {
               </button>
             </div>
           )}
-          {/* Active Range Display */}
-          {(dateFilter === 'custom' && startDate && endDate) && (
-            <div style={{
-              marginTop: '0.75rem',
-              padding: '0.5rem 0.75rem',
-              background: '#fff4d8',
-              borderRadius: '6px',
-              fontSize: '0.85rem',
-              color: '#856404',
-              fontWeight: '600'
-            }}>
-              📅 Active Range: {dayjs(startDate).format('MMM D, YYYY')} - {dayjs(endDate).format('MMM D, YYYY')}
-            </div>
-          )}
         </div>
 
         {/* Additional Filters */}
@@ -1008,8 +1495,8 @@ const OrderHistory = () => {
                 }}
               >
                 <option value="all">All Orders</option>
-                <option value="dine_in">🍽️ Dine-In</option>
-                <option value="delivery">🚚 Delivery</option>
+                <option value="dine_in">Dine-In</option>
+                <option value="delivery">Delivery</option>
               </select>
             </div>
 
@@ -1034,6 +1521,7 @@ const OrderHistory = () => {
                 <option value="all">All</option>
                 <option value="pending">Pending</option>
                 <option value="completed">Paid</option>
+                <option value="cancelled">Cancelled</option>
               </select>
             </div>
 
@@ -1056,8 +1544,8 @@ const OrderHistory = () => {
                 }}
               >
                 <option value="all">All</option>
-                <option value="cash">💵 Cash</option>
-                <option value="bank_transfer">🏦 Bank Transfer</option>
+                <option value="cash">💰 Cash</option>
+                <option value="bank_transfer">💳 Bank Transfer</option>
               </select>
             </div>
 
@@ -1084,6 +1572,7 @@ const OrderHistory = () => {
                 <option value="preparing">Preparing</option>
                 <option value="ready">Ready</option>
                 <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
             </div>
 
@@ -1118,7 +1607,7 @@ const OrderHistory = () => {
           {/* Search Bar */}
           <div>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: '600', color: '#495057' }}>
-              🔍 Search (Order #, Table #, Customer Name/Phone, Address)
+              <FaSearch /> Search (Order #, Table #, Customer Name/Phone, Address)
             </label>
             <input
               type="text"
@@ -1153,40 +1642,19 @@ const OrderHistory = () => {
                 opacity: orders.length === 0 ? 0.5 : 1
               }}
             >
-              📄 Export PDF ({orders.length} orders)
+              <FaFilePdf style={{ marginRight: '0.5rem' }} /> Export PDF ({orders.length} orders)
             </button>
-            {(orderTypeFilter !== 'all' || searchTerm || paymentStatusFilter !== 'all' || paymentMethodFilter !== 'all' || orderStatusFilter !== 'all' || sortBy !== 'date_desc') && (
-              <button
-                onClick={() => {
-                  setOrderTypeFilter('all');
-                  setSearchTerm('');
-                  setPaymentStatusFilter('all');
-                  setPaymentMethodFilter('all');
-                  setOrderStatusFilter('all');
-                  setSortBy('date_desc');
-                }}
-                style={{
-                  padding: '0.5rem 1rem',
-                  border: '2px solid #dc3545',
-                  borderRadius: '8px',
-                  background: 'white',
-                  color: '#dc3545',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem'
-                }}
-              >
-                🗑️ Clear All Filters
-              </button>
-            )}
           </div>
         </div>
 
-        {/* Orders List */}
+        <AppliedFiltersBanner
+          items={appliedFilterItems}
+          onClearAll={appliedFilterItems.length > 1 ? clearAllOrderFilters : undefined}
+        />
+
+        {/* Orders List — show screen loading on every fetch/refetch */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '3rem', color: '#6c757d' }}>
-            Loading orders...
-          </div>
+          <ScreenLoading label="Loading orders..." />
         ) : error ? (
           <div style={{
             background: '#fff5f5',
@@ -1206,7 +1674,7 @@ const OrderHistory = () => {
             textAlign: 'center',
             color: '#6c757d'
           }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📋</div>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}><FaClipboard /></div>
             <h3>No orders found</h3>
             <p>Try adjusting your date filters</p>
           </div>
@@ -1236,7 +1704,7 @@ const OrderHistory = () => {
                     <h3 style={{ margin: 0, color: '#2d3748' }}>
                       Order #{order.order_number || order.orderNumber || order.id}
                       <span style={{ marginLeft: '0.5rem', fontSize: '0.9rem', fontWeight: 'normal', color: '#6c757d' }}>
-                        ({(order.order_type || order.orderType) === 'delivery' ? '🚚 Delivery' : '🍽️ Dine-In'})
+                        ({(order.order_type || order.orderType) === 'delivery' ? 'Delivery' : 'Dine-In'})
                       </span>
                     </h3>
                     <p style={{ margin: '0.5rem 0 0 0', color: '#6c757d', fontSize: '0.9rem' }}>
@@ -1246,7 +1714,7 @@ const OrderHistory = () => {
                     {/* Order Type Specific Info */}
                     {(order.order_type || order.orderType) === 'dine_in' && (order.table_number || order.tableNumber) && (
                       <p style={{ margin: '0.25rem 0', fontSize: '0.9rem', fontWeight: '600', color: '#2d3748' }}>
-                        🪑 Table: #{order.table_number || order.tableNumber}
+                        <FaUtensils style={{ marginRight: '0.25rem' }} /> Table: #{order.table_number || order.tableNumber}
                       </p>
                     )}
 
@@ -1267,7 +1735,7 @@ const OrderHistory = () => {
                             <>
                               {customerName && (
                                 <p style={{ margin: '0.25rem 0', fontSize: '0.9rem', fontWeight: '600', color: '#2d3748' }}>
-                                  👤 {customerName}
+                                  <FaUser style={{ marginRight: '0.25rem' }} /> {customerName}
                                 </p>
                               )}
                               {(() => {
@@ -1305,24 +1773,40 @@ const OrderHistory = () => {
                                     }
                                   }
 
+                                  // Get delivery status and amount
+                                  const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+                                  const totalAmount = order.totalAmount || order.total_amount || 0;
+
                                   let copyText = '';
-                                  if (customerPhone) copyText += `Phone: ${customerPhone}`;
+                                  if (customerName) copyText += `Name: ${customerName}`;
+                                  if (customerPhone) {
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Phone Number: ${customerPhone}`;
+                                  }
                                   if (deliveryAddress) {
                                     if (copyText) copyText += '\n';
-                                    copyText += `Address: ${deliveryAddress}`;
-                                  }
-                                  if (currentNotes && currentNotes.trim()) {
-                                    if (copyText) copyText += '\n\n';
-                                    copyText += `Notes: ${currentNotes}`;
+                                    copyText += `Location: ${deliveryAddress}`;
                                   }
                                   if (currentGoogleLink && currentGoogleLink.trim()) {
-                                    if (copyText) copyText += '\n\n';
-                                    copyText += `Google Maps: ${currentGoogleLink}`;
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Map Link: ${currentGoogleLink}`;
+                                  }
+                                  if (deliveryStatus) {
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Delivery Status: ${deliveryStatus.replace(/_/g, ' ')}`;
+                                  }
+                                  if (totalAmount) {
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Amount: ${formatCurrency(totalAmount)}`;
+                                  }
+                                  if (currentNotes && currentNotes.trim()) {
+                                    if (copyText) copyText += '\n';
+                                    copyText += `Notes: ${currentNotes}`;
                                   }
 
                                   try {
                                     await navigator.clipboard.writeText(copyText);
-                                    showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                    showSuccess('Order information copied to clipboard!');
                                   } catch (err) {
                                     // Fallback for older browsers
                                     const textArea = document.createElement('textarea');
@@ -1331,7 +1815,7 @@ const OrderHistory = () => {
                                     textArea.select();
                                     document.execCommand('copy');
                                     document.body.removeChild(textArea);
-                                    showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                    showSuccess('Order information copied to clipboard!');
                                   }
                                 };
 
@@ -1374,7 +1858,7 @@ const OrderHistory = () => {
                                           transition: 'background-color 0.2s ease'
                                         }}
                                       >
-                                        📞 {customerPhone}
+                                        <FaPhone style={{ marginRight: '0.25rem' }} /> {customerPhone}
                                       </p>
                                     )}
                                     {deliveryAddress && (
@@ -1385,13 +1869,12 @@ const OrderHistory = () => {
                                             margin: 0,
                                             fontSize: '0.85rem',
                                             color: '#6c757d',
-                                            flex: 1,
                                             padding: '0.25rem',
                                             borderRadius: '4px',
-                                            transition: 'background-color 0.2s ease'
+                                            transition: 'background-color 0.2s ease', display: 'flex', alignItems: 'center', gap: '0.25rem'
                                           }}
                                         >
-                                          📍 {deliveryAddress}
+                                          <FaMapMarkerAlt /> {deliveryAddress}
                                         </p>
                                         <button
                                           onClick={handleCopy}
@@ -1405,11 +1888,11 @@ const OrderHistory = () => {
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
-                                            transition: 'transform 0.2s ease'
+                                            transition: 'transform 0.2s ease', flexShrink: 0
                                           }}
-                                          title="Copy phone number, address, notes, and Google Maps link"
+                                          title="Copy order information (name, phone, location, map link, delivery status, amount)"
                                         >
-                                          📋
+                                          <FaCopy />
                                         </button>
                                       </div>
                                     )}
@@ -1499,15 +1982,34 @@ const OrderHistory = () => {
                     )}
                     <div style={{
                       marginTop: '0.5rem',
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '20px',
-                      ...getPaymentStatusColor(order.payment_status || order.paymentStatus)
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0.15rem 0.55rem',
+                      borderRadius: '999px',
+                      lineHeight: 1.1,
+                      ...(() => {
+                        const isCancelled = (order.order_status || order.orderStatus) === 'cancelled' ||
+                          (order.payment_status || order.paymentStatus) === 'cancelled';
+                        if (isCancelled) {
+                          return { background: '#fee2e2', color: '#dc2626' };
+                        }
+                        return getPaymentStatusColor(order.payment_status || order.paymentStatus);
+                      })()
                     }}>
-                      {(order.payment_status || order.paymentStatus) === 'completed' ? 'Paid' : 'Pending Payment'}
+                      {(() => {
+                        const isCancelled = (order.order_status || order.orderStatus) === 'cancelled' ||
+                          (order.payment_status || order.paymentStatus) === 'cancelled';
+                        const isPaid = (order.payment_status || order.paymentStatus) === 'completed';
+                        if (isCancelled) {
+                          return 'Cancelled';
+                        }
+                        return isPaid ? 'Paid' : 'Pending Payment';
+                      })()}
                     </div>
                     {(order.payment_method || order.paymentMethod) && (
-                      <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem' }}>
-                        {(order.payment_method || order.paymentMethod) === 'cash' ? '💵 Cash' : '🏦 Bank Transfer'}
+                      <div style={{ fontSize: '0.85rem', color: '#6c757d', marginTop: '0.25rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.25rem' }}>
+                        {(order.payment_method || order.paymentMethod) === 'cash' ? <><FaMoneyBillWave /> Cash</> : <><FaUniversity /> Bank Transfer</>}
                       </div>
                     )}
                     {/* Display return amount if not zero */}
@@ -1527,7 +2029,7 @@ const OrderHistory = () => {
                             fontWeight: '600',
                             display: 'inline-block'
                           }}>
-                            {isNegative ? '⚠️ Restaurant Owed: ' : '💰 Change Given: '}
+                            {isNegative ? '👈 Restaurant Owed: ' : '👉 Change Given: '}
                             {formatCurrency(Math.abs(returnAmt))}
                           </div>
                         );
@@ -1565,12 +2067,13 @@ const OrderHistory = () => {
                 </div>
 
                 {/* Action Buttons */}
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                   <button
                     onClick={() => fetchOrderDetails(order.id)}
                     disabled={loadingDetails}
                     style={{
                       flex: 1,
+                      minWidth: '120px',
                       padding: '0.75rem',
                       border: '2px solid var(--color-primary)',
                       borderRadius: '8px',
@@ -1581,13 +2084,14 @@ const OrderHistory = () => {
                       fontSize: '0.9rem'
                     }}
                   >
-                    {loadingDetails && expandedOrderId === order.id ? 'Loading...' : expandedOrderId === order.id ? '▼ Hide Details' : '▶ View Details'}
+                    {loadingDetails && expandedOrderId === order.id ? 'Processing...' : expandedOrderId === order.id ? <><FaChevronDown style={{ marginRight: '0.25rem' }} /> Hide Details</> : <><FaChevronRight style={{ marginRight: '0.25rem' }} /> View Details</>}
                   </button>
                   <button
                     onClick={() => handleGenerateReceipt(order)}
                     disabled={generatingReceiptId === order.id}
                     style={{
                       flex: 1,
+                      minWidth: '120px',
                       padding: '0.75rem',
                       border: '2px solid #17a2b8',
                       borderRadius: '8px',
@@ -1599,8 +2103,38 @@ const OrderHistory = () => {
                       opacity: generatingReceiptId === order.id ? 0.6 : 1
                     }}
                   >
-                    {generatingReceiptId === order.id ? 'Generating...' : '🧾 Generate Receipt'}
+                    {generatingReceiptId === order.id ? 'Generating...' : <><FaReceipt style={{ marginRight: '0.25rem' }} /> Generate Receipt</>}
                   </button>
+                  {(() => {
+                    const orderStatus = (order.order_status || order.orderStatus || 'pending').toLowerCase();
+                    const paymentStatus = (order.payment_status || order.paymentStatus || 'pending').toLowerCase();
+                    const isCancelled = orderStatus === 'cancelled' || paymentStatus === 'cancelled';
+
+                    if (!isCancelled) {
+                      return (
+                        <button
+                          onClick={() => handleCancelOrder(order.id)}
+                          disabled={cancellingOrderId === order.id}
+                          style={{
+                            flex: 1,
+                            minWidth: '120px',
+                            padding: '0.75rem',
+                            border: '2px solid #dc3545',
+                            borderRadius: '8px',
+                            background: '#dc3545',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            cursor: cancellingOrderId === order.id ? 'not-allowed' : 'pointer',
+                            fontSize: '0.9rem',
+                            opacity: cancellingOrderId === order.id ? 0.6 : 1
+                          }}
+                        >
+                          {cancellingOrderId === order.id ? 'Cancelling...' : <><FaTimes style={{ marginRight: '0.25rem' }} /> Cancel Order</>}
+                        </button>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 {/* Expanded Order Details */}
@@ -1618,8 +2152,12 @@ const OrderHistory = () => {
                     <div style={{ marginBottom: '1rem' }}>
                       <strong>Order Information:</strong>
                       <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#495057' }}>
-                        <div>Order ID: #{orderDetails.order.id}</div>
-                        <div>Order Number: #{orderDetails.order.order_number || orderDetails.order.id}</div>
+                        <div>
+                          Order #
+                          {orderDetails.order.order_number
+                            || orderDetails.order.orderNumber
+                            || orderDetails.order.id}
+                        </div>
                         <div>Date & Time: {dayjs(orderDetails.order.created_at).format('MMM D, YYYY h:mm:ss A')}</div>
                         {orderDetails.order.table_number && (
                           <div>Table Number: #{orderDetails.order.table_number}</div>
@@ -1664,24 +2202,40 @@ const OrderHistory = () => {
 
                               const handleCopy = async () => {
                                 // Use the already computed deliveryNotes and googleMapsLink (which includes fallback from customer address)
+                                // Get delivery status and amount from order details
+                                const deliveryStatus = orderDetails.order.deliveryStatus || orderDetails.order.delivery_status || 'pending';
+                                const totalAmount = orderDetails.order.totalAmount || orderDetails.order.total_amount || 0;
+
                                 let copyText = '';
-                                if (customerPhone) copyText += `Phone: ${customerPhone}`;
+                                if (customerName) copyText += `Name: ${customerName}`;
+                                if (customerPhone) {
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Phone Number: ${customerPhone}`;
+                                }
                                 if (deliveryAddress) {
                                   if (copyText) copyText += '\n';
-                                  copyText += `Address: ${deliveryAddress}`;
-                                }
-                                if (deliveryNotes && deliveryNotes.trim()) {
-                                  if (copyText) copyText += '\n\n';
-                                  copyText += `Notes: ${deliveryNotes}`;
+                                  copyText += `Location: ${deliveryAddress}`;
                                 }
                                 if (googleMapsLink && googleMapsLink.trim()) {
-                                  if (copyText) copyText += '\n\n';
-                                  copyText += `Google Maps: ${googleMapsLink}`;
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Map Link: ${googleMapsLink}`;
+                                }
+                                if (deliveryStatus) {
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Delivery Status: ${deliveryStatus.replace(/_/g, ' ')}`;
+                                }
+                                if (totalAmount) {
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Amount: ${formatCurrency(totalAmount)}`;
+                                }
+                                if (deliveryNotes && deliveryNotes.trim()) {
+                                  if (copyText) copyText += '\n';
+                                  copyText += `Notes: ${deliveryNotes}`;
                                 }
 
                                 try {
                                   await navigator.clipboard.writeText(copyText);
-                                  showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                  showSuccess('Order information copied to clipboard!');
                                 } catch (err) {
                                   // Fallback for older browsers
                                   const textArea = document.createElement('textarea');
@@ -1690,7 +2244,7 @@ const OrderHistory = () => {
                                   textArea.select();
                                   document.execCommand('copy');
                                   document.body.removeChild(textArea);
-                                  showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                                  showSuccess('Order information copied to clipboard!');
                                 }
                               };
 
@@ -1741,10 +2295,13 @@ const OrderHistory = () => {
                                           padding: '0.25rem',
                                           borderRadius: '4px',
                                           transition: 'background-color 0.2s ease',
-                                          flex: 1
+                                          flex: 1,
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '0.25rem'
                                         }}
                                       >
-                                        Address: {deliveryAddress}
+                                        <FaMapMarkerAlt /> Address: {deliveryAddress}
                                       </div>
                                       <button
                                         onClick={handleCopy}
@@ -1755,11 +2312,12 @@ const OrderHistory = () => {
                                           padding: '0.25rem',
                                           fontSize: '1rem',
                                           color: '#495057',
-                                          transition: 'transform 0.2s ease'
+                                          transition: 'transform 0.2s ease',
+                                          flexShrink: 0
                                         }}
-                                        title="Copy phone number, address, notes, and Google Maps link"
+                                        title="Copy order information (name, phone, location, map link, delivery status, amount)"
                                       >
-                                        📋
+                                        <FaCopy />
                                       </button>
                                     </div>
                                   )}
@@ -1807,7 +2365,7 @@ const OrderHistory = () => {
                             marginBottom: '0.25rem',
                             fontSize: '0.9rem'
                           }}>
-                            {item.item_name || item.name} × {item.quantity} @ {formatCurrency(item.price)} = {formatCurrency(item.price * item.quantity)}
+                            {item.item_name || item.name} {item.quantity} - {formatCurrency(item.price)} = {formatCurrency(item.price * item.quantity)}
                           </div>
                         ))}
                       </div>
@@ -1838,7 +2396,7 @@ const OrderHistory = () => {
 
                           return (
                             <>
-                              <div>Payment Method: {paymentMethod === 'cash' ? '💵 Cash' : '🏦 Bank Transfer'}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>Payment Method: {paymentMethod === 'cash' ? 'Cash' : 'Bank Transfer'}</div>
                               <div>Payment Status: <span style={{ textTransform: 'capitalize', fontWeight: '600' }}>{paymentStatus}</span></div>
                               {amountTaken && (
                                 <div>Amount Taken: {formatCurrency(amountTaken)}</div>
@@ -1867,7 +2425,7 @@ const OrderHistory = () => {
                         color: '#856404',
                         fontWeight: '600'
                       }}>
-                        ⚠️ <strong>Special Instructions:</strong> {orderDetails.order.special_instructions}
+                        âš ï¸ <strong>Special Instructions:</strong> {orderDetails.order.special_instructions}
                       </div>
                     )}
                   </div>
@@ -1878,6 +2436,15 @@ const OrderHistory = () => {
         )}
       </div>
 
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+        onConfirm={confirmModal.onConfirm || (() => { })}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+      />
     </div>
   );
 };

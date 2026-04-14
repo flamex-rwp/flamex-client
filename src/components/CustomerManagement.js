@@ -1,20 +1,59 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { customerAPI } from '../services/customerAPI';
+import React, { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineModal from './OfflineModal';
 import ConfirmationModal from './ConfirmationModal';
 import CustomerAddressModal from './CustomerAddressModal';
 import './AdminPortal.css';
+import { FaMapMarkerAlt } from 'react-icons/fa';
+import {
+  useDebouncedValue,
+  useCustomerListQuery,
+  useCustomerSearchQuery,
+  useCustomersAddressHydration,
+  useCustomerDetailQuery,
+  useCreateCustomerMutation,
+  useUpdateCustomerMutation,
+  useDeleteCustomerMutation,
+  useCreateCustomerAddressMutation,
+} from '../hooks';
+import { customerKeys } from '../lib/queryKeys';
 
 const CustomerManagement = () => {
   const { showSuccess, showError } = useToast();
   const { online } = useOffline();
-  const [customers, setCustomers] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+  const fetchEnabled = online || isElectron;
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchType, setSearchType] = useState('all'); // 'all', 'phone', 'name', 'address'
-  const debounceTimerRef = useRef(null);
+  const debouncedSearch = useDebouncedValue(searchQuery, 500);
+  const isSearch = debouncedSearch.trim().length >= 2;
+
+  const listQuery = useCustomerListQuery(1, 1000, { enabled: fetchEnabled && !isSearch });
+  const searchQueryHook = useCustomerSearchQuery(debouncedSearch, { enabled: fetchEnabled && isSearch });
+
+  const sourceQuery = isSearch ? searchQueryHook : listQuery;
+
+  const { customers } = useCustomersAddressHydration(
+    sourceQuery.data ?? [],
+    { enabled: fetchEnabled && sourceQuery.isSuccess }
+  );
+
+  const initializingList =
+    !sourceQuery.data && (sourceQuery.isPending || sourceQuery.isFetching);
+
+  const createCustomerMutation = useCreateCustomerMutation();
+  const updateCustomerMutation = useUpdateCustomerMutation();
+  const deleteCustomerMutation = useDeleteCustomerMutation();
+  const createCustomerAddressMutation = useCreateCustomerAddressMutation();
+
+  const savingCustomer =
+    createCustomerMutation.isPending ||
+    updateCustomerMutation.isPending ||
+    createCustomerAddressMutation.isPending;
+
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [customerForm, setCustomerForm] = useState({
@@ -22,7 +61,8 @@ const CustomerManagement = () => {
     phone: '',
     backupPhone: '',
     address: '',
-    notes: ''
+    notes: '',
+    googleLink: ''
   });
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
@@ -37,88 +77,43 @@ const CustomerManagement = () => {
   const [addressSearchQuery, setAddressSearchQuery] = useState('');
   const [showAddressDropdown, setShowAddressDropdown] = useState(false);
 
-  const fetchCustomers = useCallback(async () => {
-    setLoading(true);
-    try {
-      let response;
-      if (searchQuery.trim().length >= 2) {
-        // Use search endpoint
-        response = await customerAPI.search(searchQuery);
-        const data = response.data.data || response.data || [];
-        const customersList = Array.isArray(data) ? data : [];
-        // Ensure addresses are included - fetch full data if missing
-        const customersWithAddresses = await Promise.all(
-          customersList.map(async (customer) => {
-            if (!customer.addresses || customer.addresses.length === 0) {
-              try {
-                const fullResponse = await customerAPI.getById(customer.id);
-                const fullCustomer = fullResponse.data?.data || fullResponse.data || customer;
-                return { ...customer, addresses: fullCustomer.addresses || [] };
-              } catch {
-                return customer;
-              }
-            }
-            return customer;
-          })
-        );
-        setCustomers(customersWithAddresses);
-      } else {
-        // Use list endpoint
-        response = await customerAPI.list(1, 50);
-        const data = response.data.data || response.data || {};
-        const customersList = Array.isArray(data.customers) ? data.customers : [];
-        // Ensure addresses are included
-        const customersWithAddresses = await Promise.all(
-          customersList.map(async (customer) => {
-            if (!customer.addresses || customer.addresses.length === 0) {
-              try {
-                const fullResponse = await customerAPI.getById(customer.id);
-                const fullCustomer = fullResponse.data?.data || fullResponse.data || customer;
-                return { ...customer, addresses: fullCustomer.addresses || [] };
-              } catch {
-                return customer;
-              }
-            }
-            return customer;
-          })
-        );
-        setCustomers(customersWithAddresses);
-      }
-    } catch (err) {
-      console.error('Failed to fetch customers:', err);
-      // Don't show error for network errors when offline - cache will handle it
-      if (err.response) {
-        const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Unknown server error';
-        showError('Failed to load customers: ' + errorMessage);
-      }
-      setCustomers([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [searchQuery, showError]);
+  const detailForEdit = useCustomerDetailQuery(editingCustomer?.id, {
+    enabled: Boolean(editingCustomer?.id && showCustomerModal && fetchEnabled),
+    placeholderData: editingCustomer || undefined,
+  });
 
+  const prevEditingIdRef = useRef(null);
   useEffect(() => {
-    // Debounce search
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
+    if (!editingCustomer || !showCustomerModal) {
+      prevEditingIdRef.current = null;
+      return;
     }
+    const id = editingCustomer.id;
+    const fromDetail = detailForEdit.data?.addresses;
+    const fromRow = editingCustomer.addresses;
+    const addrs =
+      Array.isArray(fromDetail) && fromDetail.length > 0
+        ? fromDetail
+        : (Array.isArray(fromRow) && fromRow.length > 0 ? fromRow : []);
+    setCustomerAddresses(addrs);
+    if (prevEditingIdRef.current !== id) {
+      prevEditingIdRef.current = id;
+      const defaultAddress = addrs.find((addr) => addr.isDefault) || addrs[0];
+      const displayAddress = defaultAddress?.address || editingCustomer.address || '';
+      setCustomerForm({
+        name: editingCustomer.name || '',
+        phone: editingCustomer.phone || '',
+        backupPhone: editingCustomer.backupPhone || editingCustomer.backup_phone || '',
+        address: displayAddress,
+        notes: editingCustomer.notes || '',
+        googleLink: editingCustomer.googleLink || editingCustomer.google_link || ''
+      });
+    }
+  }, [editingCustomer, showCustomerModal, detailForEdit.data]);
 
-    debounceTimerRef.current = setTimeout(() => {
-      fetchCustomers();
-    }, 500);
-
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, [searchQuery, fetchCustomers]);
-
-  // Initial fetch on mount
-  useEffect(() => {
-    fetchCustomers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const invalidateCustomers = () => {
+    queryClient.invalidateQueries({ queryKey: customerKeys.all });
+  };
 
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
@@ -132,43 +127,49 @@ const CustomerManagement = () => {
       }
 
       if (editingCustomer) {
-        // Check if address is new (not in existing addresses)
-        const isNewAddress = !customerAddresses.some(addr => addr.address === customerForm.address);
+        const isNewAddress = !customerAddresses.some((addr) => addr.address === customerForm.address);
 
-        // Update customer
-        await customerAPI.update(editingCustomer.id, {
-          name: customerForm.name,
-          phone: customerForm.phone,
-          backupPhone: customerForm.backupPhone,
-          notes: customerForm.notes
+        await updateCustomerMutation.mutateAsync({
+          id: editingCustomer.id,
+          data: {
+            name: customerForm.name,
+            phone: customerForm.phone,
+            backupPhone: customerForm.backupPhone,
+            notes: customerForm.notes,
+            googleLink: customerForm.googleLink || undefined
+          }
         });
 
-        // If it's a new address, add it
         if (isNewAddress && customerForm.address.trim()) {
           try {
-            await customerAPI.createAddress(editingCustomer.id, {
-              address: customerForm.address.trim(),
-              isDefault: customerAddresses.length === 0, // Set as default if no addresses exist
-              notes: customerForm.notes || undefined
+            await createCustomerAddressMutation.mutateAsync({
+              customerId: editingCustomer.id,
+              data: {
+                address: customerForm.address.trim(),
+                isDefault: customerAddresses.length === 0,
+                notes: customerForm.notes || undefined
+              }
             });
           } catch (addrErr) {
             console.warn('Failed to add new address:', addrErr);
-            // Continue even if address creation fails
           }
         }
 
         showSuccess('Customer updated successfully');
       } else {
-        await customerAPI.create(customerForm);
+        await createCustomerMutation.mutateAsync({
+          ...customerForm,
+          googleLink: customerForm.googleLink || undefined
+        });
         showSuccess('Customer created successfully');
       }
 
       setShowCustomerModal(false);
       setEditingCustomer(null);
-      setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '' });
+      setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '', googleLink: '' });
       setCustomerAddresses([]);
       setAddressSearchQuery('');
-      fetchCustomers();
+      invalidateCustomers();
     } catch (err) {
       console.error('Customer Error:', err);
       const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Error processing customer';
@@ -183,9 +184,9 @@ const CustomerManagement = () => {
       message: `Are you sure you want to delete customer "${customer.name}"? This action cannot be undone.`,
       onConfirm: async () => {
         try {
-          await customerAPI.delete(customer.id);
+          await deleteCustomerMutation.mutateAsync(customer.id);
           showSuccess('Customer deleted successfully');
-          fetchCustomers();
+          invalidateCustomers();
         } catch (err) {
           console.error('Delete Customer Error:', err);
           const errorMessage = err.formattedMessage || err.response?.data?.message || err.response?.data?.error || 'Error deleting customer';
@@ -196,78 +197,51 @@ const CustomerManagement = () => {
     });
   };
 
-  const loadCustomerAddresses = useCallback(async (customerId) => {
-    try {
-      const response = await customerAPI.getAddresses(customerId);
-      const addressData = response.data?.data || response.data || [];
-      return Array.isArray(addressData) ? addressData : [];
-    } catch (err) {
-      console.error('Failed to load addresses:', err);
-      return [];
-    }
-  }, []);
-
-  const handleEditCustomer = async (customer) => {
+  const handleEditCustomer = (customer) => {
     setEditingCustomer(customer);
-
-    // Load addresses for this customer
-    const addresses = await loadCustomerAddresses(customer.id);
-    setCustomerAddresses(addresses);
-
-    // Get default address or first address
-    const defaultAddress = addresses.find(addr => addr.isDefault) || addresses[0];
-    const displayAddress = defaultAddress?.address || customer.address || '';
-
-    setCustomerForm({
-      name: customer.name || '',
-      phone: customer.phone || '',
-      backupPhone: customer.backupPhone || customer.backup_phone || '',
-      address: displayAddress,
-      notes: customer.notes || ''
-    });
     setShowCustomerModal(true);
   };
 
-  const handleOpenAddressModal = async (customer) => {
+  const handleOpenAddressModal = (customer) => {
     setSelectedCustomerForAddress(customer);
     setShowAddressModal(true);
   };
 
-  const handleAddressUpdate = async () => {
+  const handleAddressUpdate = () => {
     if (editingCustomer) {
-      // Reload addresses for editing customer
-      const addresses = await loadCustomerAddresses(editingCustomer.id);
-      setCustomerAddresses(addresses);
-      const defaultAddress = addresses.find(addr => addr.isDefault) || addresses[0];
-      if (defaultAddress) {
-        setCustomerForm({ ...customerForm, address: defaultAddress.address });
-      }
+      queryClient.invalidateQueries({ queryKey: customerKeys.detail(editingCustomer.id) });
+      queryClient.invalidateQueries({ queryKey: customerKeys.addresses(editingCustomer.id) });
     }
-    // Refresh customer list
-    fetchCustomers();
+    invalidateCustomers();
   };
 
   const handleAddNew = () => {
     setEditingCustomer(null);
-    setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '' });
+    setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '', googleLink: '' });
     setShowCustomerModal(true);
   };
 
-  // Show offline modal if offline
-  if (!online) {
+  if (!online && !isElectron) {
     return <OfflineModal title="Customer Management - Offline" />;
   }
 
+  const listError =
+    sourceQuery.isError &&
+    sourceQuery.error?.response &&
+    (sourceQuery.error.formattedMessage ||
+      sourceQuery.error.response?.data?.message ||
+      sourceQuery.error.response?.data?.error ||
+      'Unknown server error');
+
   return (
-    <div className="users-tab">
+    <div className="users-tab" style={{ marginTop: '20px' }}>
       <div className="tab-header">
         <h1>Customer Management</h1>
-        <button className="btn-primary" onClick={handleAddNew}>
+        <button type="button" className="btn-primary" onClick={handleAddNew}>
           Add New Customer
         </button>
       </div>
 
-      {/* Search Filters */}
       <div style={{
         background: 'white',
         padding: '1.5rem',
@@ -301,8 +275,11 @@ const CustomerManagement = () => {
         </div>
       </div>
 
-      {/* Customers Table */}
-      {loading && customers.length === 0 ? (
+      {sourceQuery.isError && customers.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '3rem', color: '#dc3545' }}>
+          Failed to load customers: {listError}
+        </div>
+      ) : initializingList && customers.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '3rem' }}>
           <div style={{ fontSize: '1.2rem', color: '#6c757d' }}>Loading customers...</div>
         </div>
@@ -339,21 +316,22 @@ const CustomerManagement = () => {
                 <th>Phone</th>
                 <th>Backup Phone</th>
                 <th>Address</th>
+                <th>Google Maps</th>
                 <th>Total Orders</th>
                 <th>Total Spent</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {customers.map(customer => (
+              {customers.map((customer) => (
                 <tr key={customer.id}>
                   <td>{customer.id}</td>
-                  <td>{customer.name}</td>
-                  <td>{customer.phone}</td>
-                  <td>{customer.backupPhone || customer.backup_phone || '-'}</td>
+                  <td>{customer.name.length > 20 ? customer.name.slice(0, 20) + '...' : customer.name}</td>
+                  <td>{customer.phone.length > 10 ? customer.phone.slice(0, 10) + '...' : customer.phone}</td>
+                  <td>{customer.backupPhone && customer.backupPhone.length > 10 ? customer.backupPhone.slice(0, 10) + '...' : customer.backupPhone || customer.backup_phone || '-'}</td>
                   <td style={{ maxWidth: '200px' }}>
                     {(() => {
-                      const defaultAddr = customer.addresses?.find(addr => addr.isDefault) ||
+                      const defaultAddr = customer.addresses?.find((addr) => addr.isDefault) ||
                         customer.addresses?.[0] ||
                         (customer.address ? { address: customer.address, isDefault: true } : null);
                       if (!defaultAddr) return '-';
@@ -377,15 +355,53 @@ const CustomerManagement = () => {
                       );
                     })()}
                   </td>
+                  <td style={{ maxWidth: '200px' }}>
+                    {(() => {
+                      const customerMapsLink = customer.googleLink || customer.google_link;
+                      const defaultAddr = customer.addresses?.find((addr) => addr.isDefault) ||
+                        customer.addresses?.[0] ||
+                        (customer.address ? { address: customer.address, isDefault: true, googleMapsLink: null } : null);
+                      const addressMapsLink = defaultAddr?.googleMapsLink || defaultAddr?.google_maps_link;
+                      const mapsLink = customerMapsLink || addressMapsLink;
+                      if (!mapsLink) return '-';
+                      return (
+                        <a
+                          href={mapsLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            color: '#339af0',
+                            textDecoration: 'underline',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            display: 'block',
+                            maxWidth: '200px'
+                          }}
+                          title={mapsLink}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <FaMapMarkerAlt style={{ marginRight: '0.5rem' }} /> Open Map
+                        </a>
+                      );
+                    })()}
+                  </td>
                   <td>{customer.totalOrders || customer.total_orders || 0}</td>
                   <td>PKR {parseFloat(customer.totalSpent || customer.total_spent || 0).toFixed(2)}</td>
-                  <td>
-                    <button className="btn-edit" onClick={() => handleEditCustomer(customer)}>
-                      Edit
-                    </button>
-                    <button className="btn-delete" onClick={() => handleDeleteCustomer(customer)}>
-                      Delete
-                    </button>
+                  <td className="table-actions-cell">
+                    <div className="table-action-buttons">
+                      <button type="button" className="btn-edit" onClick={() => handleEditCustomer(customer)}>
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-delete"
+                        onClick={() => handleDeleteCustomer(customer)}
+                        disabled={deleteCustomerMutation.isPending}
+                      >
+                        {deleteCustomerMutation.isPending ? 'Processing...' : 'Delete'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -394,7 +410,6 @@ const CustomerManagement = () => {
         </div>
       )}
 
-      {/* Customer Modal */}
       {showCustomerModal && (
         <div style={{
           position: 'fixed',
@@ -408,6 +423,7 @@ const CustomerManagement = () => {
           alignItems: 'center',
           zIndex: 1000
         }}>
+
           <div style={{
             background: 'white',
             borderRadius: '12px',
@@ -415,8 +431,28 @@ const CustomerManagement = () => {
             width: '90%',
             maxWidth: '500px',
             maxHeight: '90vh',
-            overflow: 'auto'
+            overflow: 'auto',
+            position: 'relative'
           }}>
+
+            <button type="button" style={{
+              position: 'absolute',
+              top: '1rem',
+              right: '1rem',
+              background: 'white',
+              borderRadius: '50%',
+              padding: '0.5rem',
+              border: 'none',
+              fontSize: '1.5rem',
+              cursor: 'pointer'
+            }}
+            onClick={() => {
+              setShowCustomerModal(false);
+              setEditingCustomer(null);
+            }}
+            >
+              ×
+            </button>
             <h2 style={{ marginBottom: '1.5rem' }}>
               {editingCustomer ? 'Edit Customer' : 'Add New Customer'}
             </h2>
@@ -504,7 +540,10 @@ const CustomerManagement = () => {
                   {editingCustomer && (
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.85rem', fontWeight: 'normal', color: '#6c757d' }}>
                       (or <span
+                        role="button"
+                        tabIndex={0}
                         onClick={() => handleOpenAddressModal(editingCustomer)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleOpenAddressModal(editingCustomer); }}
                         style={{ color: '#339af0', cursor: 'pointer', textDecoration: 'underline' }}
                       >manage addresses</span>)
                     </span>
@@ -518,8 +557,6 @@ const CustomerManagement = () => {
                       const query = e.target.value;
                       setAddressSearchQuery(query);
                       setShowAddressDropdown(true);
-
-                      // Update form address as user types
                       setCustomerForm({ ...customerForm, address: query });
                     }}
                     onFocus={() => {
@@ -529,19 +566,15 @@ const CustomerManagement = () => {
                       }
                     }}
                     onBlur={() => {
-                      // Delay to allow click on dropdown
                       setTimeout(() => {
                         setShowAddressDropdown(false);
-                        // If search query doesn't match any address, keep it as new address
                         if (addressSearchQuery && editingCustomer) {
-                          const matches = customerAddresses.some(addr =>
+                          const matches = customerAddresses.some((addr) =>
                             addr.address.toLowerCase() === addressSearchQuery.trim().toLowerCase()
                           );
                           if (!matches) {
-                            // Keep the new address
                             setCustomerForm({ ...customerForm, address: addressSearchQuery });
                           } else {
-                            // Reset to selected address
                             setAddressSearchQuery('');
                           }
                         } else {
@@ -549,7 +582,7 @@ const CustomerManagement = () => {
                         }
                       }, 200);
                     }}
-                    placeholder={editingCustomer ? "Type to search addresses or enter new address..." : "Enter address..."}
+                    placeholder={editingCustomer ? 'Type to search addresses or enter new address...' : 'Enter address...'}
                     required={!editingCustomer}
                     style={{
                       width: '100%',
@@ -561,7 +594,6 @@ const CustomerManagement = () => {
                     }}
                   />
 
-                  {/* Address Dropdown */}
                   {editingCustomer && showAddressDropdown && customerAddresses.length > 0 && (
                     <div
                       onMouseDown={(e) => e.preventDefault()}
@@ -583,7 +615,7 @@ const CustomerManagement = () => {
                       {(() => {
                         const query = addressSearchQuery.trim().toLowerCase();
                         const filtered = query
-                          ? customerAddresses.filter(addr => addr.address.toLowerCase().includes(query))
+                          ? customerAddresses.filter((addr) => addr.address.toLowerCase().includes(query))
                           : customerAddresses;
 
                         return filtered.map((addr) => (
@@ -602,8 +634,8 @@ const CustomerManagement = () => {
                               borderBottom: '1px solid #f1f3f5',
                               background: customerForm.address === addr.address ? '#e7f5ff' : 'white'
                             }}
-                            onMouseEnter={(e) => e.target.style.background = '#f8f9fa'}
-                            onMouseLeave={(e) => e.target.style.background = customerForm.address === addr.address ? '#e7f5ff' : 'white'}
+                            onMouseEnter={(e) => { e.target.style.background = '#f8f9fa'; }}
+                            onMouseLeave={(e) => { e.target.style.background = customerForm.address === addr.address ? '#e7f5ff' : 'white'; }}
                           >
                             <div style={{ fontWeight: '500' }}>
                               {addr.address}
@@ -631,9 +663,8 @@ const CustomerManagement = () => {
                         ));
                       })()}
 
-                      {/* Show "New Address" option if query doesn't match */}
                       {addressSearchQuery.trim() &&
-                        !customerAddresses.some(addr =>
+                        !customerAddresses.some((addr) =>
                           addr.address.toLowerCase() === addressSearchQuery.trim().toLowerCase()
                         ) && (
                           <div
@@ -652,21 +683,20 @@ const CustomerManagement = () => {
                               color: '#28a745',
                               fontWeight: '500'
                             }}
-                            onMouseEnter={(e) => e.target.style.background = '#e6ffed'}
-                            onMouseLeave={(e) => e.target.style.background = '#f8f9fa'}
+                            onMouseEnter={(e) => { e.target.style.background = '#e6ffed'; }}
+                            onMouseLeave={(e) => { e.target.style.background = '#f8f9fa'; }}
                           >
-                            + Add as new address: "{addressSearchQuery}"
+                            + Add as new address: &quot;{addressSearchQuery}&quot;
                           </div>
-                        )}
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Show selected address details */}
                 {editingCustomer && customerForm.address && (
                   <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
                     {(() => {
-                      const selectedAddr = customerAddresses.find(addr => addr.address === customerForm.address);
+                      const selectedAddr = customerAddresses.find((addr) => addr.address === customerForm.address);
                       if (selectedAddr) {
                         return (
                           <div>
@@ -691,9 +721,8 @@ const CustomerManagement = () => {
                             )}
                           </div>
                         );
-                      } else {
-                        return <span style={{ color: '#28a745' }}>● New address (will be created on save)</span>;
                       }
+                      return <span style={{ color: '#28a745' }}>● New address (will be created on save)</span>;
                     })()}
                   </div>
                 )}
@@ -716,13 +745,34 @@ const CustomerManagement = () => {
                   }}
                 />
               </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600' }}>
+                  Google Maps Link
+                </label>
+                <input
+                  type="url"
+                  value={customerForm.googleLink}
+                  onChange={(e) => setCustomerForm({ ...customerForm, googleLink: e.target.value })}
+                  placeholder="https://maps.google.com/..."
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    border: '2px solid #dee2e6',
+                    borderRadius: '8px',
+                    fontSize: '0.95rem'
+                  }}
+                />
+                <small style={{ display: 'block', marginTop: '0.25rem', color: '#6c757d', fontSize: '0.85rem' }}>
+                  Optional: Add a Google Maps link for this customer&apos;s location
+                </small>
+              </div>
               <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
                 <button
                   type="button"
                   onClick={() => {
                     setShowCustomerModal(false);
                     setEditingCustomer(null);
-                    setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '' });
+                    setCustomerForm({ name: '', phone: '', backupPhone: '', address: '', notes: '', googleLink: '' });
                     setCustomerAddresses([]);
                     setAddressSearchQuery('');
                     setShowAddressDropdown(false);
@@ -742,8 +792,9 @@ const CustomerManagement = () => {
                   type="submit"
                   className="btn-primary"
                   style={{ padding: '0.75rem 1.5rem' }}
+                  disabled={savingCustomer}
                 >
-                  {editingCustomer ? 'Update' : 'Create'}
+                  {savingCustomer ? 'Processing...' : (editingCustomer ? 'Update' : 'Create')}
                 </button>
               </div>
             </form>
@@ -759,7 +810,7 @@ const CustomerManagement = () => {
           if (confirmModal.onConfirm) confirmModal.onConfirm();
           setConfirmModal({ ...confirmModal, isOpen: false });
         }}
-        onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+        onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
         variant={confirmModal.variant}
       />
 
@@ -777,4 +828,3 @@ const CustomerManagement = () => {
 };
 
 export default CustomerManagement;
-
