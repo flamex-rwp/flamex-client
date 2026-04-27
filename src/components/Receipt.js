@@ -460,13 +460,6 @@ export const printReceipt = (orderData, printStage) => {
 
     w.document.close();
 
-    // Store iframe reference for cleanup
-    const cleanupIframe = () => {
-      if (iframe && iframe.parentNode) {
-        iframe.parentNode.removeChild(iframe);
-      }
-    };
-
     // Guard flag to prevent multiple resolve calls
     let hasResolved = false;
 
@@ -1243,13 +1236,6 @@ export const printCombinedReceipt = (orderData) => {
     w.document.write(combinedHTML);
     w.document.close();
 
-    // Store iframe reference for cleanup
-    const cleanupIframe = () => {
-      if (iframe && iframe.parentNode) {
-        iframe.parentNode.removeChild(iframe);
-      }
-    };
-
     // Guard flag to prevent multiple resolve calls
     let hasResolved = false;
 
@@ -1394,12 +1380,6 @@ const Receipt = ({ orderData, printStage }) => {
     boxSizing: 'border-box',
     color: '#000000'
   };
-  
-  // First header style - no top margin
-  const firstHeaderStyle = {
-    ...headerStyle,
-    marginTop: '0',
-  };
 
   const centerTextStyle = {
     textAlign: 'center',
@@ -1411,14 +1391,6 @@ const Receipt = ({ orderData, printStage }) => {
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
     color: '#000000'
-  };
-
-  const hrStyle = {
-    border: 'none',
-    borderTop: '0.5px solid #000',
-    margin: '5px 0',
-    width: '100%',
-    boxSizing: 'border-box'
   };
 
   const asciiArtStyle = {

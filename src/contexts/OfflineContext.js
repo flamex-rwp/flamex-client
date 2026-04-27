@@ -1,10 +1,9 @@
 // React context for offline-first PWA functionality
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { startAutoSync, stopAutoSync, getSyncStatus, forceSyncNow } from '../services/offlineSyncService';
+import { startAutoSync, getSyncStatus, forceSyncNow } from '../services/offlineSyncService';
 import { isOnline } from '../services/offlineSyncService';
 import { clearApiCache } from '../services/cacheService';
 import {
-  subscribeToOrderUpdates,
   subscribeToSyncCompleted,
   subscribeToDataRefresh,
   broadcastSyncCompleted

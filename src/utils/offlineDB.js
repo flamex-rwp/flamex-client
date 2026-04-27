@@ -522,7 +522,6 @@ export const updateOrder = async (id, updates) => {
         
         const newDeliveryStatus = updates.deliveryStatus || updates.delivery_status;
         const newOrderStatus = updates.orderStatus || updates.order_status;
-        const newPaymentStatus = updates.paymentStatus || updates.payment_status;
         
         // Status hierarchies for comparison
         const orderStatusHierarchy = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered', 'completed'];
@@ -592,7 +591,6 @@ export const updatePendingOperationsForOrder = async (offlineId, serverOrderId) 
     await new Promise((resolve, reject) => {
       request.onsuccess = async () => {
         const operations = request.result || [];
-        let updatedCount = 0;
         
         for (const op of operations) {
           // Check if this operation references the offline ID
@@ -615,7 +613,6 @@ export const updatePendingOperationsForOrder = async (offlineId, serverOrderId) 
             // Update the endpoint to use server ID - replace all variations
             if (op.endpoint) {
               let updatedEndpoint = op.endpoint;
-              const originalEndpoint = updatedEndpoint;
               
               // Replace full OFFLINE- ID
               if (updatedEndpoint.includes(fullOfflineId)) {
@@ -627,7 +624,7 @@ export const updatePendingOperationsForOrder = async (offlineId, serverOrderId) 
               }
               // Replace any remaining OFFLINE- pattern as fallback
               if (updatedEndpoint.includes('OFFLINE-')) {
-                updatedEndpoint = updatedEndpoint.replace(/OFFLINE-[^\/]+/, serverOrderId);
+                updatedEndpoint = updatedEndpoint.replace(/OFFLINE-[^/]+/, serverOrderId);
               }
               
               op.endpoint = updatedEndpoint;
@@ -644,7 +641,6 @@ export const updatePendingOperationsForOrder = async (offlineId, serverOrderId) 
             
             // Save the updated operation
             await store.put(op);
-            updatedCount++;
           }
         }
         
@@ -684,7 +680,6 @@ export const markOrderSynced = async (id, serverOrder) => {
     if (serverOrder) {
       // Try multiple lookup strategies to find the local order (needed to preserve offline status)
       let localOrder = null;
-      let lookupStrategy = 'direct-id';
       
       // Strategy 1: direct lookup with provided id
       const tryGet = async (lookupId) => {
@@ -701,14 +696,12 @@ export const markOrderSynced = async (id, serverOrder) => {
       if (!localOrder && id && !id.startsWith('OFFLINE-')) {
         const prefixedId = `OFFLINE-${id}`;
         localOrder = await tryGet(prefixedId);
-        if (localOrder) lookupStrategy = 'offline-prefixed';
       }
       
       // Strategy 3: if still not found and serverOrder has orderNumber, try by orderNumber index
       if (!localOrder) {
         const orderNumber = serverOrder.orderNumber || serverOrder.order_number;
         if (orderNumber) {
-          lookupStrategy = 'orderNumber';
           const index = store.index('orderNumber');
           const req = index.get(orderNumber);
           localOrder = await new Promise((resolve) => {
@@ -720,7 +713,6 @@ export const markOrderSynced = async (id, serverOrder) => {
       
       // Strategy 4: if still not found, try serverOrder.id
       if (!localOrder && serverOrder.id && serverOrder.id !== id) {
-        lookupStrategy = 'server-id';
         localOrder = await tryGet(serverOrder.id);
       }
       
