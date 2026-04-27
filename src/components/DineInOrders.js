@@ -10,6 +10,151 @@ import { getOfflineOrders, getOfflineOrdersCount, updateOfflineOrder, addPending
 import { isOnline, syncPendingOperations } from '../services/offlineSyncService';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineIndicator from './OfflineIndicator';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import ScreenLoading from './ScreenLoading';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter
+} from '../utils/filterSessionPersistence';
+import {
+  FaUtensils,
+  FaClock,
+  FaCheck,
+  FaMoneyBillWave,
+  FaUniversity,
+  FaEdit,
+  FaTimes,
+  FaUndo,
+  FaUser,
+  FaExclamationTriangle,
+  FaDollarSign,
+  FaUserTie,
+  FaWifi
+} from 'react-icons/fa';
+import { MdWifiOff } from 'react-icons/md';
+
+// Helper function to get status icon
+const getStatusIcon = (status) => {
+  const statusLower = (status || 'pending').toLowerCase();
+  if (statusLower === 'pending') return FaClock;
+  if (statusLower === 'preparing') return FaUserTie;
+  if (statusLower === 'ready') return FaCheck;
+  if (statusLower === 'completed') return FaCheck;
+  return FaClock;
+};
+
+// Custom Status Dropdown Component with Icons
+const StatusDropdown = ({ value, onChange, disabled, options, style }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  const selectedOption = options.find(opt => opt.value === value) || options[0];
+  const IconComponent = selectedOption.icon;
+
+  return (
+    <div ref={dropdownRef} style={{ position: 'relative', flex: 1, ...style }}>
+      <button
+        type="button"
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          padding: '0.5rem',
+          border: '2px solid #e2e8f0',
+          borderRadius: '6px',
+          background: 'white',
+          color: '#495057',
+          fontWeight: '600',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: '0.85rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.5rem'
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {IconComponent && <IconComponent />}
+          {selectedOption.label}
+        </span>
+        <span style={{ fontSize: '0.75rem' }}>▼</span>
+      </button>
+      {isOpen && !disabled && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: '0.25rem',
+            background: 'white',
+            border: '2px solid #e2e8f0',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            overflow: 'hidden'
+          }}
+        >
+          {options.map((option) => {
+            const OptionIcon = option.icon;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange({ target: { value: option.value } });
+                  setIsOpen(false);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  border: 'none',
+                  background: value === option.value ? '#f0f0f0' : 'white',
+                  color: '#495057',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  textAlign: 'left'
+                }}
+                onMouseEnter={(e) => {
+                  if (value !== option.value) {
+                    e.currentTarget.style.background = '#f8f9fa';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (value !== option.value) {
+                    e.currentTarget.style.background = 'white';
+                  }
+                }}
+              >
+                {OptionIcon && <OptionIcon />}
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 dayjs.extend(relativeTime);
 
@@ -19,18 +164,39 @@ const formatCurrency = (value) => {
   return `${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 };
 
-const DineInOrders = () => {
+const DineInOrders = ({ basePath = '/manager' }) => {
   const navigate = useNavigate();
   const { showSuccess, showError } = useToast();
-  const [activeTab, setActiveTab] = useState('pending'); // 'pending' or 'completed'
+
+  const initialScreenFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.dineInOrders);
+    if (!s) {
+      return {
+        activeTab: 'pending',
+        dateFilter: 'today',
+        startDate: null,
+        endDate: null,
+        showCustomRange: false
+      };
+    }
+    return {
+      activeTab: s.activeTab === 'completed' ? 'completed' : 'pending',
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange)
+    };
+  }, []);
+
+  const [activeTab, setActiveTab] = useState(initialScreenFilters.activeTab); // 'pending' or 'completed'
   const [pendingOrders, setPendingOrders] = useState([]);
   const [completedOrders, setCompletedOrders] = useState([]);
-  const [loading, setLoading] = useState(false); // Start as false, will be set to true when actually loading
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [dateFilter, setDateFilter] = useState('today'); // 'today', 'yesterday', 'this_week', 'this_month', or 'custom'
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [dateFilter, setDateFilter] = useState(initialScreenFilters.dateFilter); // 'today', 'yesterday', 'this_week', 'this_month', or 'custom'
+  const [startDate, setStartDate] = useState(initialScreenFilters.startDate);
+  const [endDate, setEndDate] = useState(initialScreenFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialScreenFilters.showCustomRange);
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [updatingStatusId, setUpdatingStatusId] = useState(null);
   const [cancellingOrderId, setCancellingOrderId] = useState(null);
@@ -83,36 +249,115 @@ const DineInOrders = () => {
     bank_payments: { ...defaultStats.bank_payments, ...(incoming.bank_payments || {}) }
   }), [defaultStats]);
 
+  // Use refs to always get the latest filter values (avoid stale closures)
+  // Initialize refs with current state values immediately - CRITICAL for initial load
+  const dateFilterRef = useRef(dateFilter);
+  const startDateRef = useRef(startDate);
+  const endDateRef = useRef(endDate);
+  
+  // Update refs when values change - CRITICAL: This must run synchronously and BEFORE any fetch calls
+  useEffect(() => {
+    // Update refs immediately and synchronously
+    dateFilterRef.current = dateFilter;
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+  }, [dateFilter, startDate, endDate]);
+
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.dineInOrders, {
+      activeTab,
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange
+    });
+  }, [activeTab, dateFilter, startDate, endDate, showCustomRange]);
+
+  // Refresh orders + cards when switching tabs
+  useEffect(() => {
+    if (!hasInitialLoad.current) return;
+    const run = async () => {
+      try {
+        await Promise.all([
+          fetchOrders(activeTab),
+          fetchStats(),
+        ]);
+      } catch (e) {
+        // Silently handle
+      }
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
   // Fetch statistics for summary cards
   const fetchStats = useCallback(async () => {
     try {
-      const params = { filter: dateFilter };
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
+      // Always use the latest filter values from refs (not from closure)
+      const currentDateFilter = dateFilterRef.current;
+      const currentStartDate = startDateRef.current;
+      const currentEndDate = endDateRef.current;
+      
+      // Convert filter to date range - prioritize dateFilter over custom dates (same logic as fetchOrders)
+      let finalStartDate = null;
+      let finalEndDate = null;
+      
+      if (currentDateFilter && currentDateFilter !== 'custom') {
+        // Use dateFilter if it's a quick filter (not custom)
+        if (currentDateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (currentDateFilter === 'custom' && currentStartDate && currentEndDate) {
+        // Use custom dates only if custom filter is selected
+        finalStartDate = currentStartDate;
+        finalEndDate = currentEndDate;
+      } else {
+        // Default to today if no filter is set
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
       }
+      
+      const params = { 
+        filter: currentDateFilter,
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined,
+        status: activeTab || 'pending',
+      };
 
       if (!online) {
         setStats({ ...defaultStats });
         return;
       }
 
-      const response = await ordersAPI.getDineInStats(
-        { params, useCache: false, disableCacheFallback: true }
-      );
-      const payload = response.data?.data || response.data || {};
-      setStats(mergeStats({
+      const response = await ordersAPI.getDineInStats(params);
+      const payload = response.data?.data ?? response.data ?? {};
+      const tabStatus = (activeTab || 'pending').toLowerCase();
+      const isPendingTab = tabStatus === 'pending';
+      
+      const newStats = mergeStats({
         pending_payments: {
-          count: payload.pendingOrders || 0,
-          total_amount: payload.pendingRevenue || 0
+          count: isPendingTab ? (payload.pendingOrders || 0) : 0,
+          total_amount: isPendingTab ? (payload.pendingRevenue || 0) : 0
         },
         received_payments: {
-          count: payload.completedOrders || 0,
-          total_amount: payload.completedRevenue || 0
+          count: !isPendingTab ? (payload.completedOrders || 0) : 0,
+          total_amount: !isPendingTab ? (payload.completedRevenue || 0) : 0
         },
-        total_orders: payload.totalOrders || 0,
-        total_revenue: payload.totalRevenue || 0,
-        average_order_value: payload.totalOrders > 0 ? (payload.totalRevenue / payload.totalOrders) : 0,
+        total_orders: isPendingTab ? (payload.pendingOrders || 0) : (payload.completedOrders || 0),
+        total_revenue: isPendingTab ? (payload.pendingRevenue || 0) : (payload.completedRevenue || 0),
+        average_order_value: (isPendingTab ? (payload.pendingOrders || 0) : (payload.completedOrders || 0)) > 0
+          ? ((isPendingTab ? (payload.pendingRevenue || 0) : (payload.completedRevenue || 0)) / (isPendingTab ? (payload.pendingOrders || 0) : (payload.completedOrders || 0)))
+          : 0,
         cash_payments: {
           count: payload.cashStats?.count || 0,
           total_amount: payload.cashStats?.revenue || 0
@@ -121,13 +366,14 @@ const DineInOrders = () => {
           count: payload.bankStats?.count || 0,
           total_amount: payload.bankStats?.revenue || 0
         }
-      }));
+      });
+      
+      setStats(newStats);
     } catch (err) {
-      console.error('Failed to load stats', err);
       // Set default stats if API fails
       setStats({ ...defaultStats });
     }
-  }, [dateFilter, startDate, endDate, mergeStats, defaultStats]);
+  }, [mergeStats, defaultStats, online, activeTab]); // Add activeTab so cards follow tab
 
   const isOfflineEffective = useCallback(() => {
     const browserOffline = (typeof navigator !== 'undefined' && navigator.onLine === false);
@@ -140,31 +386,58 @@ const DineInOrders = () => {
     setLoading(true);
     setError('');
     try {
+      // Convert filter to date range - prioritize dateFilter over custom dates
+      let finalStartDate = null;
+      let finalEndDate = null;
+      
+      if (dateFilter && dateFilter !== 'custom') {
+        // Use dateFilter if it's a quick filter (not custom)
+        if (dateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (dateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (dateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (dateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (dateFilter === 'custom' && startDate && endDate) {
+        // Use custom dates only if custom filter is selected
+        finalStartDate = startDate;
+        finalEndDate = endDate;
+      } else {
+        // Custom without both dates: same as Delivery — effective range is today
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
+      }
+      
       const params = {
         status: targetTab,
-        filter: dateFilter
+        filter: dateFilter,
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined
       };
-
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
-      }
 
       // Fetch API orders when online only (avoid stale cache offline)
       let apiOrders = [];
       if (online) {
         try {
-          const response = await ordersAPI.getDineInOrders({ ...params, useCache: false, disableCacheFallback: true });
-          apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          const response = await ordersAPI.getDineInStats({ ...params, useCache: false, disableCacheFallback: true });
+          const payload = response.data?.data ?? response.data ?? {};
+          apiOrders = (payload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
         } catch (err) {
-          console.warn('Failed to load dine-in orders from API, using offline only:', err);
+          // Silently handle errors
         }
-      } else {
-        console.log('[DineInOrders] Offline - skipping API fetch to avoid stale data');
       }
 
-      // Fetch offline orders only when offline; skip when online to avoid stale data display
-      const offlineOrders = online ? [] : (
+      // Fetch offline orders only when offline; skip when online or in Electron to avoid stale data display
+      // In Electron, all orders are in SQLite, so skip IndexedDB offline orders
+      const isElectron = typeof window !== 'undefined' && window.electronAPI;
+      const offlineOrders = (isElectron || online) ? [] : (
         await getOfflineOrders()
       ).filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
@@ -228,15 +501,12 @@ const DineInOrders = () => {
         return dateB - dateA;
       });
 
-      console.log('✅ Orders fetched:', apiOrders.length, 'API orders,', filteredOfflineOrders.length, 'offline orders for', targetTab);
-
       if (targetTab === 'pending') {
         setPendingOrders(allOrders);
       } else {
         setCompletedOrders(allOrders);
       }
     } catch (err) {
-      console.error('Failed to load dine-in orders', err);
       setError(err.response?.data?.error || 'Failed to load orders');
     } finally {
       setLoading(false);
@@ -245,10 +515,10 @@ const DineInOrders = () => {
 
   // Fetch both pending and completed orders (for counts)
   const fetchAllOrders = useCallback(async (showLoading = true) => {
-    // Prevent concurrent calls - but allow initial load
-    if (isLoadingRef.current && hasInitialLoad.current) {
-      // Skip if already loading and we've already done initial load
-      console.log('[fetchAllOrders] Skipping - already loading');
+    // Prevent concurrent calls - but allow filter changes to proceed
+    // CRITICAL: Only skip if we're showing loading AND already loading (prevents duplicate initial loads)
+    // But allow filter changes (showLoading=false) to proceed even if loading
+    if (isLoadingRef.current && hasInitialLoad.current && showLoading) {
       return;
     }
 
@@ -258,30 +528,65 @@ const DineInOrders = () => {
       setLoading(true);
     }
 
-    console.log('[fetchAllOrders] Starting fetch, showLoading:', showLoading);
-    try {
-      const params = { filter: dateFilter };
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
-      }
+    // Always use the latest filter values from refs (not from closure)
+    const currentDateFilter = dateFilterRef.current;
+    const currentStartDate = startDateRef.current;
+    const currentEndDate = endDateRef.current;
 
-      // Fetch API orders in parallel (only when online to avoid stale cached data offline)
+    try {
+      // Convert filter to date range - prioritize dateFilter over custom dates
+      let finalStartDate = null;
+      let finalEndDate = null;
+      
+      if (currentDateFilter && currentDateFilter !== 'custom') {
+        // Use dateFilter if it's a quick filter (not custom)
+        if (currentDateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (currentDateFilter === 'custom' && currentStartDate && currentEndDate) {
+        // Use custom dates only if custom filter is selected
+        finalStartDate = currentStartDate;
+        finalEndDate = currentEndDate;
+      } else {
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
+      }
+      
+      const params = { 
+        filter: currentDateFilter,
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : null,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : null
+      };
+
+      // Fetch API orders - CRITICAL: Fetch ALL orders (like getDineInStats does) and filter client-side
+      // This ensures we get orders with status 'preparing' and 'ready' which should count as pending
       let pendingApiOrders = [];
       let completedApiOrders = [];
       if (online) {
         try {
-          const [pendingResponse, completedResponse] = await Promise.all([
-            ordersAPI.getDineInOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true }),
-            ordersAPI.getDineInOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true })
+          const [pendingRes, completedRes] = await Promise.all([
+            ordersAPI.getDineInStats({ ...params, status: 'pending', useCache: false, disableCacheFallback: true }),
+            ordersAPI.getDineInStats({ ...params, status: 'completed', useCache: false, disableCacheFallback: true }),
           ]);
-          pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
-          completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+
+          const pendingPayload = pendingRes.data?.data ?? pendingRes.data ?? {};
+          const completedPayload = completedRes.data?.data ?? completedRes.data ?? {};
+
+          pendingApiOrders = (pendingPayload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          completedApiOrders = (completedPayload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
         } catch (err) {
-          console.warn('Failed to load orders from API, using offline only:', err);
+          // Silently handle errors
         }
-      } else {
-        console.log('[DineInOrders] Offline - skipping API fetch to avoid stale data');
       }
 
       // Fetch offline orders only when offline; skip when online to avoid showing stale local orders
@@ -369,50 +674,52 @@ const DineInOrders = () => {
         return dateB - dateA;
       });
 
+      // Console log all fetched orders for debugging
+      console.log('📦 [DineInOrders] fetchAllOrders - Fetched ALL orders', {
+        filter: currentDateFilter,
+        pendingCount: allPendingOrders.length,
+        completedCount: allCompletedOrders.length,
+        pendingOrders: allPendingOrders,
+        completedOrders: allCompletedOrders,
+      });
+
       setPendingOrders(allPendingOrders);
       setCompletedOrders(allCompletedOrders);
-      console.log('[fetchAllOrders] Successfully loaded orders');
     } catch (err) {
-      console.error('[fetchAllOrders] Failed to load all orders', err);
       setError('Failed to load orders');
     } finally {
       // Always clear loading state and ref, regardless of showLoading flag
-      console.log('[fetchAllOrders] Clearing loading state');
       isLoadingRef.current = false;
       if (showLoading) {
         setLoading(false);
       }
     }
-  }, [dateFilter, startDate, endDate, online]);
+  }, [online]); // Remove dateFilter, startDate, endDate from dependencies - we use refs instead
 
   // Initial load - only once (handles React StrictMode double mount)
   useEffect(() => {
     // Prevent double loading in React StrictMode
     if (loadAttemptedRef.current) {
-      console.log('[Initial Load] Skipping - already attempted');
-      // If we're skipping due to StrictMode remount, ensure loading is cleared
-      setLoading(false);
-      isLoadingRef.current = false;
       return;
     }
-
-    console.log('[Initial Load] Starting initial load');
+    
+    // CRITICAL: Initialize refs BEFORE loading data to ensure fetchStats uses correct values
+    dateFilterRef.current = dateFilter;
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+    
     loadAttemptedRef.current = true;
 
     const loadData = async () => {
       try {
-        console.log('[Initial Load] Calling fetchAllOrders and fetchStats');
         await Promise.all([
           fetchAllOrders(true),
           fetchStats()
         ]);
-        console.log('[Initial Load] Completed successfully');
         hasInitialLoad.current = true;
       } catch (err) {
-        console.error('[Initial Load] Failed:', err);
         setError('Failed to load orders');
       } finally {
-        console.log('[Initial Load] Clearing loading state');
         // Ensure loading is always cleared
         isLoadingRef.current = false;
         setLoading(false);
@@ -436,7 +743,7 @@ const DineInOrders = () => {
       return;
     }
 
-    if (!hasInitialLoad.current || isLoadingRef.current) return; // Skip if initial load hasn't happened yet or already loading
+    if (!hasInitialLoad.current) return; // Skip if initial load hasn't happened yet
 
     // Check if filters actually changed
     const filtersChanged =
@@ -444,28 +751,55 @@ const DineInOrders = () => {
       prevFiltersRef.current.startDate !== startDate ||
       prevFiltersRef.current.endDate !== endDate;
 
-    if (!filtersChanged) return;
+    if (!filtersChanged) {
+      return;
+    }
 
-    // Update previous filter values
+    // Update previous filter values immediately to prevent duplicate calls
     prevFiltersRef.current = { dateFilter, startDate, endDate };
+    
+    // Update refs IMMEDIATELY and SYNCHRONOUSLY so fetchAllOrders and fetchStats use the latest values
+    dateFilterRef.current = dateFilter;
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+    
+    // CRITICAL: Reset stats to defaults immediately to prevent showing stale data
+    // This ensures users see that stats are being refreshed
+    setStats({ ...defaultStats });
+
+    // Prevent concurrent calls - if already loading, skip this update
+    if (isLoadingRef.current) {
+      return;
+    }
 
     const loadData = async () => {
-      isLoadingRef.current = true;
+      // Ensure refs are definitely updated (safety check)
+      dateFilterRef.current = dateFilter;
+      startDateRef.current = startDate;
+      endDateRef.current = endDate;
+      
       try {
-        await Promise.all([
-          fetchAllOrders(),
-          fetchStats()
-        ]);
+        // Force refetch with latest values - refs are already updated above
+        // Call fetchStats FIRST to ensure it uses the latest refs
+        await fetchStats();
+        await fetchAllOrders(true);
+      } catch (error) {
+        // Silently handle errors
       } finally {
         isLoadingRef.current = false;
       }
     };
+    
+    // Execute immediately - refs are already updated synchronously above
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFilter, startDate, endDate]); // Reload when filters change
 
-  // Show offline pending orders notice (PWA sync)
+  // Show offline pending orders notice (PWA sync) - Skip in Electron
   useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && window.electronAPI;
+    if (isElectron) return; // Skip offline sync notifications in Electron
+    
     const checkOffline = async () => {
       if (offlineToastShown) return;
       try {
@@ -475,7 +809,7 @@ const DineInOrders = () => {
           setOfflineToastShown(true);
         }
       } catch (err) {
-        console.warn('Failed to check offline orders count', err);
+        // Silently handle errors
       }
     };
     checkOffline();
@@ -489,16 +823,14 @@ const DineInOrders = () => {
       const syncAndRefresh = async () => {
         try {
           // First, sync pending operations (offline orders and updates) to the database
-          console.log('[DineInOrders] Coming back online - syncing pending operations...');
           const syncResult = await syncPendingOperations();
 
           // Only refresh orders from database if sync was successful (or no pending operations)
           if (syncResult && (syncResult.synced > 0 || syncResult.failed === 0)) {
-            console.log('[DineInOrders] Sync completed successfully, refreshing orders from database...');
             if (!isLoadingRef.current) {
               isLoadingRef.current = true;
               await Promise.all([
-                fetchAllOrders(false), // Don't show loading state
+                fetchAllOrders(true),
                 fetchStats()
               ]);
               isLoadingRef.current = false;
@@ -507,25 +839,23 @@ const DineInOrders = () => {
             setPendingOrders(prev => prev.filter(o => !o.offline));
             setCompletedOrders(prev => prev.filter(o => !o.offline));
           } else if (syncResult && syncResult.failed > 0) {
-            console.warn('[DineInOrders] Some operations failed to sync:', syncResult.errors);
-            // Still refresh to show current state, but log the errors
+            // Still refresh to show current state
             if (!isLoadingRef.current) {
               isLoadingRef.current = true;
               await Promise.all([
-                fetchAllOrders(false),
+                fetchAllOrders(true),
                 fetchStats()
               ]);
               isLoadingRef.current = false;
             }
           }
         } catch (error) {
-          console.error('[DineInOrders] Error during sync/refresh:', error);
           // Even if sync fails, try to refresh orders to show current state
           if (!isLoadingRef.current) {
             isLoadingRef.current = true;
             try {
               await Promise.all([
-                fetchAllOrders(false),
+                fetchAllOrders(true),
                 fetchStats()
               ]);
             } finally {
@@ -546,18 +876,7 @@ const DineInOrders = () => {
   // Removed periodic refresh - only refresh on user actions or when coming back online
   // This prevents bad UX from constant page reloading
 
-  // Reset filter to 'today' when switching tabs (but not on initial mount)
-  const prevActiveTabRef = useRef(null);
-  useEffect(() => {
-    // Only reset if activeTab actually changed (not on initial mount)
-    if (prevActiveTabRef.current !== null && prevActiveTabRef.current !== activeTab) {
-      setDateFilter('today');
-      setStartDate(null);
-      setEndDate(null);
-      setShowCustomRange(false);
-    }
-    prevActiveTabRef.current = activeTab;
-  }, [activeTab]);
+  // Keep date filter when switching tabs (pending/completed).
 
   const handleDateFilterChange = (start, end) => {
     setStartDate(start);
@@ -568,15 +887,13 @@ const DineInOrders = () => {
 
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      } else {
-        setDateFilter('today');
-        setStartDate(null);
-        setEndDate(null);
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
+      // Clear any loading state to prevent race conditions
+      if (isLoadingRef.current) {
+        isLoadingRef.current = false;
+      }
       setDateFilter(filter);
       setStartDate(null);
       setEndDate(null);
@@ -584,12 +901,33 @@ const DineInOrders = () => {
     }
   };
 
+  const resetDateFilter = useCallback(() => {
+    if (isLoadingRef.current) {
+      isLoadingRef.current = false;
+    }
+    setDateFilter('today');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(false);
+  }, []);
+
+  const clearAppliedCustomRange = useCallback(() => {
+    if (isLoadingRef.current) {
+      isLoadingRef.current = false;
+    }
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
+
   const openPaymentModal = (order) => {
+    const orderTotal = order.totalAmount || order.total_amount || 0;
     setPaymentModal({
       open: true,
       order,
       paymentMethod: 'cash',
-      amountTaken: ''
+      amountTaken: orderTotal.toString()
     });
   };
 
@@ -604,6 +942,14 @@ const DineInOrders = () => {
 
   const handleMarkAsPaid = async () => {
     const { order, paymentMethod, amountTaken } = paymentModal;
+    
+    console.log('💰 [DineInOrders] Mark as Paid - START:', {
+      orderId: order.id,
+      orderNumber: order.order_number || order.orderNumber,
+      paymentMethod,
+      amountTaken,
+      totalAmount: order.totalAmount || order.total_amount
+    });
 
     if (!paymentMethod) {
       showError('Please select a payment method');
@@ -682,12 +1028,41 @@ const DineInOrders = () => {
         }
       } else {
         try {
+          console.log('💰 [DineInOrders] Mark as Paid - Calling API...', { orderId: order.id, payload });
           await ordersAPI.markAsPaid(order.id, payload);
+          console.log('💰 [DineInOrders] Mark as Paid - API call successful');
 
-          // Fetch updated order details for receipt
+          // Fetch updated order details for receipt and verification
           const orderResponse = await ordersAPI.getById(order.id);
           // Handle wrapped response format {success, data: {...}}
           updatedOrder = orderResponse.data.data || orderResponse.data;
+          console.log('💰 [DineInOrders] Mark as Paid - Fetched updated order from database:', {
+            orderId: updatedOrder?.id,
+            paymentStatus: updatedOrder?.paymentStatus || updatedOrder?.payment_status,
+            orderStatus: updatedOrder?.orderStatus || updatedOrder?.order_status,
+            orderType: updatedOrder?.orderType || updatedOrder?.order_type
+          });
+          
+          // Verify that orderStatus was set to 'completed' for dine-in orders
+          if ((updatedOrder?.orderType || updatedOrder?.order_type) === 'dine_in') {
+            const actualOrderStatus = updatedOrder?.orderStatus || updatedOrder?.order_status;
+            if (actualOrderStatus !== 'completed') {
+              console.warn('💰 [DineInOrders] Mark as Paid - WARNING: Order status not set to completed!', {
+                expected: 'completed',
+                actual: actualOrderStatus
+              });
+              // Force update order status to completed
+              try {
+                await ordersAPI.updateOrderStatus(order.id, 'completed');
+                console.log('💰 [DineInOrders] Mark as Paid - Forced order status to completed');
+                // Refetch to get updated order
+                const recheckResponse = await ordersAPI.getById(order.id);
+                updatedOrder = recheckResponse.data.data || recheckResponse.data;
+              } catch (statusError) {
+                console.error('💰 [DineInOrders] Mark as Paid - Failed to force order status:', statusError.message);
+              }
+            }
+          }
 
           if (!updatedOrder) {
             throw new Error('Failed to fetch order details');
@@ -700,7 +1075,6 @@ const DineInOrders = () => {
           orderItems = Array.isArray(orderItems) ? orderItems : [];
 
           if (!orderItems || orderItems.length === 0) {
-            console.warn('No items found for order', order.id);
             // Use items from the order object if available
             const fallbackItems = order.items ? (Array.isArray(order.items) ? order.items : []) : [];
             if (fallbackItems.length === 0) {
@@ -712,7 +1086,7 @@ const DineInOrders = () => {
         } catch (apiError) {
           // If API call fails (network error), fall back to offline mode
           if (!isOnline() || apiError.code === 'ERR_NETWORK') {
-            console.warn('API call failed, saving offline:', apiError);
+            console.error('💰 [DineInOrders] Mark as Paid - API call failed:', apiError.message);
             const newPaymentStatus = 'completed';
             const newOrderStatus = 'completed';
             const updatedData = {
@@ -739,10 +1113,8 @@ const DineInOrders = () => {
                 ...updatedData,
                 offlineStatusUpdated: true
               });
-              console.log('[DineInOrders] Updated offline order in IndexedDB:', realOfflineId, updatedData);
             } catch (updateError) {
               // For online-created orders (no offline copy), just log
-              console.warn('Could not update offline order, will queue for sync:', updateError);
               updatedOrder = { ...order, ...updatedData };
             }
 
@@ -792,7 +1164,7 @@ const DineInOrders = () => {
 
       // Calculate total amount (use order total if available, otherwise use calculated total)
       const calculatedTotal = subtotalAfterDiscount;
-      const totalAmount = parseFloat(updatedOrder?.total_amount || order.total_amount) || calculatedTotal;
+      const totalAmount = parseFloat(updatedOrder?.total_amount || updatedOrder?.totalAmount || order.totalAmount || order.total_amount) || calculatedTotal;
 
       const returnAmount = paymentMethod === 'cash' && amountTaken
         ? parseFloat(amountTaken) - totalAmount
@@ -838,7 +1210,7 @@ const DineInOrders = () => {
         return_amount: payload.returnAmount || 0
       };
 
-      // Move order from pending to completed tab
+      // Move order from pending to completed tab IMMEDIATELY
       setPendingOrders(prev => prev.filter(o => o.id !== order.id));
       setCompletedOrders(prev => {
         const exists = prev.find(o => o.id === order.id);
@@ -848,29 +1220,51 @@ const DineInOrders = () => {
       // Free the table once paid/completed
       emitTableFreed(order);
 
-      // Dispatch event to refresh badges immediately
+      // Dispatch event to refresh badges immediately with updated status
       window.dispatchEvent(new CustomEvent('orderUpdated', {
-        detail: { orderType: 'dine_in', orderId: order.id, action: 'markedPaid' }
+        detail: { 
+          orderType: 'dine_in', 
+          orderId: order.id, 
+          action: 'markedPaid',
+          orderStatus: 'completed',
+          paymentStatus: 'completed'
+        }
       }));
 
       // Show appropriate success message based on online/offline status
       const isOfflineOrder = order.offline;
       if (isOfflineOrder) {
-        showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
+        showSuccess(`Order has been marked as paid and status updated to completed. Changes will sync when you are back online.`);
       } else {
-        showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
+        showSuccess(`Order has been marked as paid successfully`);
       }
       closePaymentModal();
 
-      // Refresh data from server to ensure consistency and get any concurrent changes
-      if (!isLoadingRef.current) {
-        setTimeout(() => {
-          fetchAllOrders(false);
-          fetchStats();
-        }, 500);
-      }
+      // Refresh stats and fetch all orders to ensure UI is in sync with database
+      // This will refresh from database, but our updated filtering logic will keep paid orders in completed tab
+      console.log('💰 [DineInOrders] Mark as Paid - Refetching stats and orders...');
+      await Promise.all([
+        fetchStats(),
+        fetchAllOrders(true)
+      ]);
+      console.log('💰 [DineInOrders] Mark as Paid - Stats and orders refreshed');
+      
+      // Dispatch another event after refresh to ensure badges are updated
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { 
+            orderType: 'dine_in', 
+            orderId: order.id, 
+            action: 'markedPaid',
+            orderStatus: 'completed',
+            paymentStatus: 'completed'
+          }
+        }));
+      }, 500);
+      
+      console.log('💰 [DineInOrders] Mark as Paid - COMPLETE');
     } catch (err) {
-      console.error('Failed to mark order as paid', err);
+      console.error('💰 [DineInOrders] Mark as Paid - ERROR:', err.message);
       showError(err.formattedMessage || err.response?.data?.error || 'Failed to mark order as paid');
     } finally {
       setMarkingPaidId(null);
@@ -879,7 +1273,7 @@ const DineInOrders = () => {
 
   const getReturnAmount = () => {
     if (paymentModal.paymentMethod !== 'cash' || !paymentModal.amountTaken) return 0;
-    const total = parseFloat(paymentModal.order?.total_amount || 0);
+    const total = parseFloat(paymentModal.order?.totalAmount || paymentModal.order?.total_amount || 0);
     const taken = parseFloat(paymentModal.amountTaken || 0);
     // Allow negative values for partial payments (amount due)
     return taken - total;
@@ -915,142 +1309,146 @@ const DineInOrders = () => {
 
   // Handle status update
   const handleStatusUpdate = async (orderId, newStatus) => {
+    if (activeTab === 'completed') return;
+    console.log('🔄 [DineInOrders] Status Update - START:', {
+      orderId,
+      newStatus,
+      timestamp: new Date().toISOString()
+    });
     setUpdatingStatusId(orderId);
     isUpdatingStatus.current = true;
     try {
       const targetOrder = [...pendingOrders, ...completedOrders].find(o => o.id === orderId);
       const oldStatus = targetOrder?.orderStatus || targetOrder?.order_status || 'pending';
+      
+      if (!targetOrder) {
+        console.error('🔄 [DineInOrders] Status Update - ERROR: Order not found!', { orderId });
+        throw new Error('Order not found');
+      }
+      
+      console.log('🔄 [DineInOrders] Status Update - Order details:', {
+        orderId: targetOrder.id,
+        orderNumber: targetOrder.order_number || targetOrder.orderNumber,
+        oldStatus,
+        newStatus
+      });
 
       // Update local state immediately for better UX (no page refresh)
       const updateLocalState = () => {
-        const updatedOrder = { ...targetOrder, orderStatus: newStatus, order_status: newStatus };
+        // Helper function to match order IDs (handles string/number conversion and OFFLINE- prefix)
+        const matchesOrderId = (o) => {
+          const oId = String(o.id || '');
+          const targetId = String(orderId || '');
+          return oId === targetId || oId === String(orderId);
+        };
 
-        // Determine if order should move between tabs
-        const shouldBeInCompleted = newStatus === 'completed';
+        // Get fresh order from state to ensure we have latest data
+        const currentOrder = [...pendingOrders, ...completedOrders].find(matchesOrderId) || targetOrder;
+        const updatedOrder = { 
+          ...currentOrder, 
+          orderStatus: newStatus, 
+          order_status: newStatus 
+        };
+
+        // Determine if order should move between tabs (completed and cancelled both go to Completed tab)
+        const shouldBeInCompleted = newStatus === 'completed' || newStatus === 'cancelled';
         const currentlyInCompleted = activeTab === 'completed';
 
         // If order needs to move between tabs, update both states
         if (shouldBeInCompleted && !currentlyInCompleted) {
           // Move from pending to completed
-          setPendingOrders(prev => prev.filter(o => o.id !== orderId));
+          setPendingOrders(prev => prev.filter(o => !matchesOrderId(o)));
           setCompletedOrders(prev => {
-            const exists = prev.find(o => o.id === orderId);
-            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+            const exists = prev.find(matchesOrderId);
+            return exists ? prev.map(o => matchesOrderId(o) ? updatedOrder : o) : [...prev, updatedOrder];
           });
         } else if (!shouldBeInCompleted && currentlyInCompleted) {
           // Move from completed to pending
-          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => prev.filter(o => !matchesOrderId(o)));
           setPendingOrders(prev => {
-            const exists = prev.find(o => o.id === orderId);
-            return exists ? prev.map(o => o.id === orderId ? updatedOrder : o) : [...prev, updatedOrder];
+            const exists = prev.find(matchesOrderId);
+            return exists ? prev.map(o => matchesOrderId(o) ? updatedOrder : o) : [...prev, updatedOrder];
           });
         } else {
           // Update in current tab
           if (activeTab === 'pending') {
-            setPendingOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+            setPendingOrders(prev => prev.map(o => matchesOrderId(o) ? updatedOrder : o));
           } else {
-            setCompletedOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+            setCompletedOrders(prev => prev.map(o => matchesOrderId(o) ? updatedOrder : o));
           }
         }
       };
 
-      // If offline, save to pending operations queue
-      if (!isOnline()) {
-        // Extract real order ID (remove OFFLINE- prefix if present) - ensure string
+      // Electron with local SQL DB - always make direct API call
+      try {
+        // Extract real order ID (remove OFFLINE- prefix if present) for API call
         const orderIdStr = typeof orderId === 'string' ? orderId : String(orderId);
         const realOrderId = orderIdStr.startsWith('OFFLINE-')
-          ? targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, '')
+          ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
           : orderIdStr;
-
-        // Save to pending operations for sync when online
-        await addPendingOperation({
-          type: 'update_order_status',
-          endpoint: `/api/orders/${realOrderId}/status`,
-          method: 'PUT',
-          data: { order_status: newStatus }
-        });
-
-        // Also update local offline order if it exists
-        if (targetOrder?.offline) {
-          await updateOfflineOrder(targetOrder.offlineId || realOrderId, {
-            order_status: newStatus,
-            orderStatus: newStatus
-          });
-        }
-
+        
+        // Convert to number if it's a numeric string (for Electron API)
+        const numericId = !isNaN(realOrderId) && !isNaN(parseInt(realOrderId)) ? parseInt(realOrderId) : realOrderId;
+        
+        // Update local state BEFORE API call for immediate UI feedback
         updateLocalState();
-        showSuccess(`Status update saved offline. It will sync when you are back online.`);
-        setUpdatingStatusId(null);
-        isUpdatingStatus.current = false;
-        return;
-      }
-
-      // Online: try API first
-      if (targetOrder?.offline) {
-        await updateOfflineOrder(targetOrder.offlineId || orderId, {
-          order_status: newStatus,
-          orderStatus: newStatus,
-          offlineStatusUpdated: true // Mark that status was updated offline
-        });
-        updateLocalState();
-        showSuccess(`Offline order status updated to ${newStatus}`);
-
-        // Refresh data from server to ensure consistency
-        if (!isLoadingRef.current) {
-          setTimeout(() => {
-            fetchAllOrders(false);
-            fetchStats();
-          }, 500);
-        }
-      } else {
+        
+        // Make API call - use numeric ID for Electron
+        console.log('🔄 [DineInOrders] Status Update - Calling API...', { id: numericId, status: newStatus });
+        const apiResponse = await ordersAPI.updateOrderStatus(numericId, newStatus);
+        console.log('🔄 [DineInOrders] Status Update - API call successful');
+        
+        // Verify by fetching the order from database
         try {
-          await ordersAPI.updateOrderStatus(orderId, newStatus);
-          updateLocalState();
-          showSuccess(`Order status updated to ${newStatus}`);
-
-          // Free table if the order is now completed or cancelled
-          if (newStatus === 'completed' || newStatus === 'cancelled') {
-            emitTableFreed(targetOrder);
-          }
-
-          // Dispatch event to refresh badges immediately
-          window.dispatchEvent(new CustomEvent('orderUpdated', {
-            detail: { orderType: 'dine_in', orderId, newStatus }
-          }));
-
-          // Refresh data from server to ensure consistency and get any concurrent changes
-          if (!isLoadingRef.current) {
-            setTimeout(() => {
-              fetchAllOrders(false);
-              fetchStats();
-            }, 500);
-          }
-        } catch (error) {
-          // Revert local state on error
-          const revertOrder = { ...targetOrder };
-          if (activeTab === 'pending') {
-            setPendingOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
-          } else {
-            setCompletedOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
-          }
-
-          // If API fails, save to pending operations
-          if (!error.response) {
-            await addPendingOperation({
-              type: 'update_order_status',
-              endpoint: `/api/orders/${orderId}/status`,
-              method: 'PUT',
-              data: { order_status: newStatus }
-            });
-            updateLocalState();
-            showSuccess(`Status update saved offline. It will sync when connection is restored.`);
-          } else {
-            throw error;
-          }
+          const verifyResponse = await ordersAPI.getById(numericId);
+          const verifiedOrder = verifyResponse?.data?.data || verifyResponse?.data;
+          console.log('🔄 [DineInOrders] Status Update - Verified from database:', {
+            orderId: verifiedOrder?.id,
+            orderStatus: verifiedOrder?.orderStatus || verifiedOrder?.order_status,
+            expectedStatus: newStatus,
+            match: (verifiedOrder?.orderStatus || verifiedOrder?.order_status) === newStatus
+          });
+        } catch (verifyError) {
+          console.warn('🔄 [DineInOrders] Status Update - Could not verify (non-critical):', verifyError.message);
         }
+        
+        showSuccess(`Order status updated to ${newStatus}`);
+
+        // Free table if the order is now completed or cancelled
+        if (newStatus === 'completed' || newStatus === 'cancelled') {
+          emitTableFreed(targetOrder);
+        }
+
+        // Dispatch event to refresh badges immediately
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { orderType: 'dine_in', orderId, newStatus }
+        }));
+
+        // Only refresh stats, not orders - local state already updated
+        console.log('🔄 [DineInOrders] Status Update - Refetching stats...');
+        fetchStats();
+        console.log('🔄 [DineInOrders] Status Update - COMPLETE');
+      } catch (error) {
+        console.error('🔄 [DineInOrders] Status Update - ERROR:', error.message);
+        
+        // Revert local state on error - use helper function to match IDs
+        const matchesOrderId = (o) => {
+          const oId = String(o.id || '');
+          const targetId = String(orderId || '');
+          return oId === targetId || oId === String(orderId);
+        };
+        
+        const revertOrder = { ...targetOrder };
+        if (activeTab === 'pending') {
+          setPendingOrders(prev => prev.map(o => matchesOrderId(o) ? revertOrder : o));
+        } else {
+          setCompletedOrders(prev => prev.map(o => matchesOrderId(o) ? revertOrder : o));
+        }
+
+        throw error;
       }
     } catch (err) {
-      console.error('Failed to update order status', err);
+      console.error('🔄 [DineInOrders] Status Update - CRITICAL ERROR:', err.message);
       showError(err.formattedMessage || err.response?.data?.error || 'Failed to update order status');
     } finally {
       setUpdatingStatusId(null);
@@ -1074,18 +1472,28 @@ const DineInOrders = () => {
             ...targetOrder,
             order_status: 'cancelled',
             orderStatus: 'cancelled',
-            status: 'cancelled'
+            status: 'cancelled',
+            payment_status: 'cancelled',
+            paymentStatus: 'cancelled'
           };
 
-          // Remove from both lists
+          // Move into completed list so user can still see it as cancelled
           setPendingOrders(prev => prev.filter(o => o.id !== orderId));
-          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            if (exists) {
+              return prev.map(o => (o.id === orderId ? updatedOrder : o));
+            }
+            return [...prev, updatedOrder];
+          });
 
           if (targetOrder?.offline) {
             await updateOfflineOrder(targetOrder.offlineId || orderId, {
               order_status: 'cancelled',
               orderStatus: 'cancelled',
-              status: 'cancelled'
+              status: 'cancelled',
+              payment_status: 'cancelled',
+              paymentStatus: 'cancelled'
             });
             showSuccess('Offline order cancelled locally');
           } else {
@@ -1104,10 +1512,9 @@ const DineInOrders = () => {
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
         } catch (err) {
-          console.error('Failed to cancel order', err);
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to cancel order');
           // Revert local state on error
-          await fetchAllOrders();
+          await fetchAllOrders(true);
         } finally {
           setCancellingOrderId(null);
         }
@@ -1155,10 +1562,9 @@ const DineInOrders = () => {
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
         } catch (err) {
-          console.error('Failed to revert payment status', err);
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to revert payment status');
           // Revert local state on error
-          await fetchAllOrders();
+          await fetchAllOrders(true);
         } finally {
           setMarkingPaidId(null);
         }
@@ -1169,12 +1575,15 @@ const DineInOrders = () => {
 
   const currentOrders = activeTab === 'pending' ? pendingOrders : completedOrders;
   const safeStats = stats || defaultStats;
+  
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       <OfflineIndicator />
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold' }}>🍽️ Dine-In Orders</h1>
+        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <FaUtensils /> Dine-In Orders
+        </h1>
 
         {/* Summary Cards */}
         <style>{`
@@ -1292,7 +1701,9 @@ const DineInOrders = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>💵 Cash Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <FaMoneyBillWave /> Cash Payments
+            </div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.cash_payments.count}
             </div>
@@ -1312,7 +1723,9 @@ const DineInOrders = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🏦 Bank Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <FaUniversity /> Bank Payments
+            </div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {stats.bank_payments.count}
             </div>
@@ -1342,7 +1755,7 @@ const DineInOrders = () => {
               fontSize: '1rem'
             }}
           >
-            ⏳ Pending ({pendingOrders.length})
+            <FaClock style={{ marginRight: '0.25rem' }} /> Pending ({pendingOrders.length})
           </button>
           <button
             onClick={() => setActiveTab('completed')}
@@ -1357,7 +1770,7 @@ const DineInOrders = () => {
               fontSize: '1rem'
             }}
           >
-            ✅ Completed ({completedOrders.length})
+            <FaCheck style={{ marginRight: '0.25rem' }} /> Completed ({completedOrders.length})
           </button>
         </div>
 
@@ -1472,28 +1885,25 @@ const DineInOrders = () => {
             </div>
           )}
 
-          {/* Active Range Display */}
-          {(dateFilter === 'custom' && startDate && endDate) && (
-            <div style={{
-              marginTop: '0.75rem',
-              padding: '0.5rem 0.75rem',
-              background: '#fff4d8',
-              borderRadius: '6px',
-              fontSize: '0.85rem',
-              color: '#7c2d12',
-              fontWeight: '600'
-            }}>
-              Active Range: {dayjs(startDate).format('MMM D, YYYY')} → {dayjs(endDate).format('MMM D, YYYY')}
-            </div>
-          )}
+          <AppliedFiltersBanner
+            items={
+              isCustomDateRangeApplied(dateFilter, startDate, endDate)
+                ? [
+                    {
+                      id: 'date',
+                      label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+                      onRemove: clearAppliedCustomRange
+                    }
+                  ]
+                : []
+            }
+          />
         </div>
       </div>
 
-      {/* Orders List */}
+      {/* Orders List — show screen loading on every fetch/refetch */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem', color: '#6c757d' }}>
-          Loading orders...
-        </div>
+        <ScreenLoading label="Loading orders..." />
       ) : error ? (
         <div style={{
           background: '#fff5f5',
@@ -1514,7 +1924,7 @@ const DineInOrders = () => {
           color: '#6c757d'
         }}>
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-            {activeTab === 'pending' ? '⏳' : '✅'}
+            {activeTab === 'pending' ? <FaClock /> : <FaCheck />}
           </div>
           <h3>No {activeTab} orders found</h3>
           <p>Try adjusting your date filters</p>
@@ -1535,6 +1945,24 @@ const DineInOrders = () => {
                 border: activeTab === 'pending' ? '2px solid #ffc107' : '2px solid #28a745'
               }}
             >
+              {/* Table badge at top for today's pending dine-in orders */}
+              {activeTab === 'pending' && dateFilter === 'today' && (order.tableNumber || order.table_number) && (
+                <div
+                  style={{
+                    marginBottom: '0.75rem',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '0.25rem 0.75rem',
+                    borderRadius: '999px',
+                    background: '#fff3cd',
+                    color: '#856404',
+                    fontSize: '0.8rem',
+                    fontWeight: 600
+                  }}
+                >
+                  Table #{order.tableNumber || order.table_number}
+                </div>
+              )}
               <div style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -1554,7 +1982,7 @@ const DineInOrders = () => {
                         fontWeight: '600',
                         border: '1px solid #ffc107'
                       }}>
-                        📴 Offline (Pending Sync)
+                        <MdWifiOff style={{ marginRight: '0.25rem' }} /> Offline (Pending Sync)
                       </span>
                     )}
                     {order.table_number && (
@@ -1568,24 +1996,31 @@ const DineInOrders = () => {
                   </p>
                   {activeTab === 'pending' && (
                     <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', fontWeight: '600', color: getDurationColor(order.created_at) }}>
-                      ⏱️ Waiting: {getOrderDuration(order.createdAt || order.created_at)}
+                      <FaClock style={{ marginRight: '0.25rem' }} /> Waiting: {getOrderDuration(order.createdAt || order.created_at)}
                     </p>
                   )}
-                  {order.order_status && (
-                    <div style={{
-                      marginTop: '0.5rem',
-                      display: 'inline-block',
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '20px',
-                      background: (order.orderStatus || order.order_status) === 'ready' ? '#d4edda' : (order.orderStatus || order.order_status) === 'preparing' ? '#fff3cd' : '#e2e3e5',
-                      color: (order.orderStatus || order.order_status) === 'ready' ? '#155724' : (order.orderStatus || order.order_status) === 'preparing' ? '#856404' : '#383d41',
-                      fontSize: '0.8rem',
-                      fontWeight: '600',
-                      textTransform: 'capitalize'
-                    }}>
-                      Status: {order.orderStatus || order.order_status}
-                    </div>
-                  )}
+                  {order.order_status && (() => {
+                    const status = order.orderStatus || order.order_status;
+                    const StatusIcon = getStatusIcon(status);
+                    return (
+                      <div style={{
+                        marginTop: '0.5rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.25rem 0.75rem',
+                        borderRadius: '20px',
+                        background: status === 'ready' ? '#d4edda' : status === 'preparing' ? '#fff3cd' : '#e2e3e5',
+                        color: status === 'ready' ? '#155724' : status === 'preparing' ? '#856404' : '#383d41',
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        textTransform: 'capitalize'
+                      }}>
+                        <StatusIcon />
+                        <span>Status: {status}</span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Offline Status Label - Show when status was updated offline */}
                   {((order.offline && (order.orderStatus || order.order_status)) || order.offlineStatusUpdated) && (
@@ -1601,7 +2036,7 @@ const DineInOrders = () => {
                       alignItems: 'center',
                       gap: '0.3rem'
                     }}>
-                      <span>📴</span>
+                      <span><MdWifiOff /></span>
                       <span>
                         Status: {(() => {
                           const status = order.orderStatus || order.order_status || 'pending';
@@ -1620,7 +2055,26 @@ const DineInOrders = () => {
                     {formatCurrency(order.totalAmount || order.total_amount)}
                   </div>
                   {(() => {
+                    const isCancelled = order.orderStatus === 'cancelled' || order.order_status === 'cancelled' || 
+                                       order.paymentStatus === 'cancelled' || order.payment_status === 'cancelled' ||
+                                       order.status === 'cancelled';
                     const isPaid = order.paymentStatus === 'completed' || order.payment_status === 'completed';
+                    if (isCancelled) {
+                      return (
+                        <div style={{
+                          marginTop: '0.5rem',
+                          padding: '0.25rem 0.75rem',
+                          borderRadius: '20px',
+                          background: '#fee2e2',
+                          color: '#dc2626',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          display: 'inline-block'
+                        }}>
+                          Cancelled
+                        </div>
+                      );
+                    }
                     return (
                       <div style={{
                         marginTop: '0.5rem',
@@ -1653,7 +2107,7 @@ const DineInOrders = () => {
                           fontWeight: '600',
                           display: 'inline-block'
                         }}>
-                          {isNegative ? '⚠️ Restaurant Owed: ' : '💰 Change Given: '}
+                          {isNegative ? <><FaExclamationTriangle style={{ marginRight: '0.25rem' }} /> Restaurant Owed: </> : <><FaDollarSign style={{ marginRight: '0.25rem' }} /> Change Given: </>}
                           {formatCurrency(Math.abs(returnAmt))}
                         </div>
                       );
@@ -1676,11 +2130,31 @@ const DineInOrders = () => {
                   {(() => {
                     const items = order.orderItems || order.order_items || order.items || [];
                     if (items.length > 0) {
-                      return items.map((item, idx) => (
-                        <div key={idx}>
-                          {item.quantity}x {item.menuItem?.name || item.menu_item?.name || item.item_name || item.name || 'Item'}
-                        </div>
-                      ));
+                      return items.map((item, idx) => {
+                        const reason =
+                          item.reason ||
+                          item.cancel_reason ||
+                          item.cancellation_reason ||
+                          item.note ||
+                          item.notes;
+                        return (
+                          <div key={idx} style={{ marginBottom: reason ? '0.25rem' : 0 }}>
+                            <div>
+                              {item.quantity}x{' '}
+                              {item.menuItem?.name ||
+                                item.menu_item?.name ||
+                                item.item_name ||
+                                item.name ||
+                                'Item'}
+                            </div>
+                            {reason && (
+                              <div style={{ fontSize: '0.8rem', color: '#b02a37' }}>
+                                <strong>Reason:</strong> {reason}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
                     } else {
                       return 'No items';
                     }
@@ -1696,9 +2170,19 @@ const DineInOrders = () => {
                       Status:
                     </label>
                     <select
-                      value={order.orderStatus || order.order_status || 'pending'}
+                      value={(() => {
+                        // Check all possible status fields to determine if cancelled
+                        const orderStatus = order.orderStatus || order.order_status || 'pending';
+                        const paymentStatus = order.paymentStatus || order.payment_status || 'pending';
+                        const status = order.status || 'pending';
+                        const isCancelled = orderStatus === 'cancelled' || paymentStatus === 'cancelled' || status === 'cancelled';
+                        return isCancelled ? 'cancelled' : orderStatus;
+                      })()}
                       onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
-                      disabled={updatingStatusId === order.id}
+                      disabled={updatingStatusId === order.id || 
+                               (order.orderStatus === 'cancelled' || order.order_status === 'cancelled' ||
+                                order.paymentStatus === 'cancelled' || order.payment_status === 'cancelled' ||
+                                order.status === 'cancelled')}
                       style={{
                         flex: 1,
                         padding: '0.5rem',
@@ -1711,16 +2195,17 @@ const DineInOrders = () => {
                         fontSize: '0.85rem'
                       }}
                     >
-                      <option value="pending">⏳ Pending</option>
-                      <option value="preparing">👨‍🍳 Preparing</option>
-                      <option value="ready">✅ Ready</option>
+                      <option value="pending">Pending</option>
+                      <option value="preparing">Preparing</option>
+                      <option value="ready">Ready</option>
+                      <option value="cancelled">Cancelled</option>
                     </select>
                   </div>
 
                   {/* Action Buttons */}
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button
-                      onClick={() => navigate(`/manager/orders?edit=${order.id}`)}
+                      onClick={() => navigate(`${basePath}/orders?edit=${order.id}`)}
                       style={{
                         flex: 1,
                         padding: '0.75rem',
@@ -1733,7 +2218,7 @@ const DineInOrders = () => {
                         fontSize: '0.9rem'
                       }}
                     >
-                      ✏️ Edit Order
+                      <FaEdit style={{ marginRight: '0.25rem' }} /> Edit Order
                     </button>
                     <button
                       onClick={() => handleCancelOrder(order.id)}
@@ -1751,17 +2236,25 @@ const DineInOrders = () => {
                         opacity: cancellingOrderId === order.id ? 0.6 : 1
                       }}
                     >
-                      {cancellingOrderId === order.id ? '...' : '❌ Cancel'}
+                      {cancellingOrderId === order.id ? 'Processing...' : <><FaTimes style={{ marginRight: '0.25rem' }} /> Cancel</>}
                     </button>
                   </div>
 
                   {(() => {
+                    const isCancelled = order.orderStatus === 'cancelled' || order.order_status === 'cancelled';
+                    const isPaid = (order.paymentStatus || order.payment_status) === 'completed';
                     const isServerOrder = order.offline !== true;
                     const offlineEffective = isOfflineEffective();
                     const disableMarkPaid = offlineEffective && isServerOrder;
                     const buttonTitle = disableMarkPaid
                       ? 'This order was created online. Reconnect to mark as paid.'
                       : undefined;
+                    
+                    // Don't show button if already paid or cancelled
+                    if (isPaid || isCancelled) {
+                      return null;
+                    }
+                    
                     return (
                       <button
                         onClick={() => openPaymentModal(order)}
@@ -1782,7 +2275,7 @@ const DineInOrders = () => {
                       >
                         {markingPaidId === order.id
                           ? 'Processing...'
-                          : (disableMarkPaid ? '💰 Mark as Paid (online only)' : '💰 Mark as Paid')}
+                          : (disableMarkPaid ? <><FaDollarSign style={{ marginRight: '0.25rem' }} /> Mark as Paid (online only)</> : <><FaDollarSign style={{ marginRight: '0.25rem' }} /> Mark as Paid</>)}
                       </button>
                     );
                   })()}
@@ -1791,33 +2284,43 @@ const DineInOrders = () => {
 
               {activeTab === 'completed' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {/* Order Status Dropdown for completed orders */}
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#495057', minWidth: '80px' }}>
-                      Status:
-                    </label>
-                    <select
-                      value={order.orderStatus || order.order_status || 'completed'}
-                      onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
-                      disabled={updatingStatusId === order.id}
-                      style={{
-                        flex: 1,
-                        padding: '0.5rem',
-                        border: '2px solid #e2e8f0',
-                        borderRadius: '6px',
-                        background: 'white',
-                        color: '#495057',
-                        fontWeight: '600',
-                        cursor: updatingStatusId === order.id ? 'not-allowed' : 'pointer',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="pending">⏳ Pending</option>
-                      <option value="preparing">👨‍🍳 Preparing</option>
-                      <option value="ready">✅ Ready</option>
-                      <option value="completed">✅ Completed</option>
-                    </select>
-                  </div>
+                  {/* Order Status - static (read-only) in Completed tab */}
+                  {(() => {
+                    const orderStatus = order.orderStatus || order.order_status || 'completed';
+                    const paymentStatus = order.paymentStatus || order.payment_status || 'pending';
+                    const status = order.status || 'completed';
+                    const isCancelled = orderStatus === 'cancelled' || paymentStatus === 'cancelled' || status === 'cancelled';
+                    const displayStatus = isCancelled ? 'cancelled' : orderStatus;
+                    const StatusIcon = getStatusIcon(displayStatus);
+                    const badgeStyle = displayStatus === 'cancelled'
+                      ? { background: '#fee2e2', color: '#dc2626' }
+                      : displayStatus === 'ready' || displayStatus === 'completed'
+                        ? { background: '#d4edda', color: '#155724' }
+                        : displayStatus === 'preparing'
+                          ? { background: '#fff3cd', color: '#856404' }
+                          : { background: '#e2e3e5', color: '#383d41' };
+                    return (
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#495057', minWidth: '80px' }}>
+                          Status:
+                        </label>
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          padding: '0.25rem 0.75rem',
+                          borderRadius: '20px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          textTransform: 'capitalize',
+                          ...badgeStyle
+                        }}>
+                          <StatusIcon />
+                          <span>{displayStatus.replace(/_/g, ' ')}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {order.payment_method && (
                     <div style={{
@@ -1853,7 +2356,7 @@ const DineInOrders = () => {
                   )}
 
                   {/* Revert Payment Button */}
-                  {order.payment_status === 'completed' && (
+                  {/* {order.payment_status === 'completed' && (
                     <button
                       onClick={() => handleRevertPayment(order.id)}
                       disabled={markingPaidId === order.id}
@@ -1870,9 +2373,9 @@ const DineInOrders = () => {
                         opacity: markingPaidId === order.id ? 0.6 : 1
                       }}
                     >
-                      {markingPaidId === order.id ? 'Processing...' : '↩️ Revert Payment'}
+                      {markingPaidId === order.id ? 'Processing...' : <><FaUndo style={{ marginRight: '0.25rem' }} /> Revert Payment</>}
                     </button>
-                  )}
+                  )} */}
                 </div>
               )}
             </div>
@@ -1913,7 +2416,7 @@ const DineInOrders = () => {
                 )}
               </div>
               <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--color-primary)' }}>
-                Total: {formatCurrency(paymentModal.order.total_amount)}
+                Total: {formatCurrency(paymentModal.order.totalAmount || paymentModal.order.total_amount)}
               </div>
             </div>
 
@@ -1928,7 +2431,10 @@ const DineInOrders = () => {
               </label>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
-                  onClick={() => setPaymentModal({ ...paymentModal, paymentMethod: 'cash' })}
+                  onClick={() => {
+                    const orderTotal = paymentModal.order?.totalAmount || paymentModal.order?.total_amount || 0;
+                    setPaymentModal({ ...paymentModal, paymentMethod: 'cash', amountTaken: orderTotal.toString() });
+                  }}
                   style={{
                     flex: 1,
                     padding: '0.75rem',
@@ -1940,7 +2446,7 @@ const DineInOrders = () => {
                     cursor: 'pointer'
                   }}
                 >
-                  💵 Cash
+                  <FaMoneyBillWave style={{ marginRight: '0.25rem' }} /> Cash
                 </button>
                 <button
                   onClick={() => setPaymentModal({ ...paymentModal, paymentMethod: 'bank_transfer', amountTaken: '' })}
@@ -1955,7 +2461,7 @@ const DineInOrders = () => {
                     cursor: 'pointer'
                   }}
                 >
-                  🏦 Bank Transfer
+                  <FaUniversity style={{ marginRight: '0.25rem' }} /> Bank Transfer
                 </button>
               </div>
             </div>
@@ -1987,7 +2493,7 @@ const DineInOrders = () => {
                   />
                 </div>
 
-                {paymentModal.amountTaken && parseFloat(paymentModal.amountTaken) >= parseFloat(paymentModal.order.total_amount) && (
+                {paymentModal.amountTaken && parseFloat(paymentModal.amountTaken) >= parseFloat(paymentModal.order.totalAmount || paymentModal.order.total_amount) && (
                   <div style={{
                     background: '#e6ffed',
                     padding: '1rem',
@@ -1997,7 +2503,7 @@ const DineInOrders = () => {
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                       <span>Total:</span>
-                      <strong>{formatCurrency(paymentModal.order.total_amount)}</strong>
+                      <strong>{formatCurrency(paymentModal.order.totalAmount || paymentModal.order.total_amount)}</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                       <span>Received:</span>

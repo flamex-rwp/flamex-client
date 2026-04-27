@@ -8,6 +8,7 @@ const CategoryManagement = () => {
   const [categories, setCategories] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [categoryName, setCategoryName] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
     title: '',
@@ -72,6 +73,17 @@ const CategoryManagement = () => {
     });
   };
 
+  const filteredCategories = (() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return categories;
+    return categories.filter((cat) => {
+      const id = String(cat?.id ?? '');
+      const name = String(cat?.name ?? '').toLowerCase();
+      const created = String(cat?.created_at ?? '');
+      return id.includes(q) || name.includes(q) || created.toLowerCase().includes(q);
+    });
+  })();
+
   return (
     <div>
       <div className="card">
@@ -114,19 +126,37 @@ const CategoryManagement = () => {
 
       <div className="card">
         <h3>Categories</h3>
+        <div className="form-group" style={{ marginBottom: '1rem' }}>
+          <label>Search:</label>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search by ID, name, or date"
+          />
+          <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#6c757d' }}>
+            Showing {filteredCategories.length} of {categories.length}
+          </div>
+        </div>
         <div className="grid grid-2">
-          {categories.map(category => (
-            <div key={category.id} className="menu-item">
-              <h3>{category.name}</h3>
-              <p>Created: {new Date(category.created_at).toLocaleDateString()}</p>
-              <button
-                className="btn btn-danger"
-                onClick={() => handleDelete(category.id)}
-              >
-                Delete
-              </button>
+          {filteredCategories.length > 0 ? (
+            filteredCategories.map(category => (
+              <div key={category.id} className="menu-item">
+                <h3>{category.name}</h3>
+                <p>Created: {new Date(category.created_at).toLocaleDateString()}</p>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => handleDelete(category.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            ))
+          ) : (
+            <div style={{ gridColumn: '1 / -1', color: '#6c757d', textAlign: 'center', padding: '1rem' }}>
+              No categories match your search.
             </div>
-          ))}
+          )}
         </div>
       </div>
 

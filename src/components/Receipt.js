@@ -1,4 +1,5 @@
 import React from 'react';
+import { getPublicAssetUrl } from '../utils/publicAssetUrl';
 
 // JavaScript-controlled printing function
 export const printReceipt = (orderData, printStage) => {
@@ -12,18 +13,31 @@ export const printReceipt = (orderData, printStage) => {
     // Generate HTML receipt
     const htmlReceipt = generateHTMLReceipt(orderData, printStage);
 
-    // Open new window and print
-    const w = window.open("", "_blank");
+    // Create hidden iframe for printing (no popup window)
+    const iframeId = `print-iframe-${Date.now()}`;
+    const iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
 
+    const w = iframe.contentWindow || iframe.contentDocument?.defaultView;
+    
     if (!w) {
-      console.error('Failed to open print window. Please allow popups.');
-      alert('Please allow popups to print receipts. Click OK to continue.');
-      resolve();
+      console.error('Failed to create print iframe.');
+      document.body.removeChild(iframe);
+      reject(new Error('Failed to create print iframe'));
       return;
     }
 
     // Optimized for 72mm thermal printer - FULL WIDTH with larger text
-    w.document.write(`
+    w.document.write(String.raw`
     <!DOCTYPE html>
     <html>
     <head>
@@ -361,6 +375,8 @@ export const printReceipt = (orderData, printStage) => {
   <body>
     ${htmlReceipt}
     <script>
+      var iframeId = '${iframeId}';
+      var hasPrinted = false; // Guard flag to prevent multiple print calls
       window.onload = function() {
         // Wait for all images to load before printing
         var images = document.getElementsByTagName('img');
@@ -398,29 +414,42 @@ export const printReceipt = (orderData, printStage) => {
           
           // Fallback timeout in case images don't load
           setTimeout(function() {
-            if (imagesLoaded < imagesToLoad) {
+            if (imagesLoaded < imagesToLoad && !hasPrinted) {
               printReceipt();
             }
           }, 2000);
         }
         
         function printReceipt() {
-          window.focus();
+          // Prevent multiple print calls
+          if (hasPrinted) {
+            return;
+          }
+          hasPrinted = true;
+          
           setTimeout(function() {
             window.print();
-            // Listen for afterprint event to close window and resolve promise
+            // Listen for afterprint event to remove iframe and resolve promise
             var printCompleted = false;
-            var closeWindow = function() {
+            var cleanup = function() {
               if (!printCompleted) {
                 printCompleted = true;
                 setTimeout(function() {
-                  window.close();
+                  // Remove iframe from DOM
+                  try {
+                    var iframe = window.frameElement || (window.parent && window.parent.document.getElementById(iframeId));
+                    if (iframe && iframe.parentNode) {
+                      iframe.parentNode.removeChild(iframe);
+                    }
+                  } catch(e) {
+                    // Iframe cleanup failed, parent will handle it
+                  }
                 }, 500);
               }
             };
-            window.addEventListener('afterprint', closeWindow);
-            // Fallback: close after timeout if afterprint doesn't fire
-            setTimeout(closeWindow, 2000);
+            window.addEventListener('afterprint', cleanup);
+            // Fallback: cleanup after timeout if afterprint doesn't fire
+            setTimeout(cleanup, 2000);
           }, 100);
         }
       };
@@ -431,17 +460,43 @@ export const printReceipt = (orderData, printStage) => {
 
     w.document.close();
 
-    // Resolve promise after a delay to allow print dialog to open
+    // Store iframe reference for cleanup
+    const cleanupIframe = () => {
+      if (iframe && iframe.parentNode) {
+        iframe.parentNode.removeChild(iframe);
+      }
+    };
+
+    // Guard flag to prevent multiple resolve calls
+    let hasResolved = false;
+
+    // The iframe's internal script handles printing via window.print()
+    // We just need to resolve the promise after a reasonable delay
+    // The iframe's internal script will handle its own cleanup
+    iframe.onload = () => {
+      // Resolve after a short delay to allow the iframe's print to trigger
+      setTimeout(() => {
+        if (!hasResolved) {
+          hasResolved = true;
+          resolve();
+        }
+      }, 500);
+    };
+
+    // Fallback: resolve promise even if onload doesn't fire
     setTimeout(() => {
-      resolve();
-    }, 100);
+      if (!hasResolved) {
+        hasResolved = true;
+        resolve();
+      }
+    }, 3000);
   });
 };
 
 // Generate HTML receipt
 const generateHTMLReceipt = (orderData, printStage) => {
-  // Get the origin for image paths
-  const origin = window.location.origin;
+  // Resolve public assets under both http(s) and file://
+  const logoUrl = getPublicAssetUrl('b-logo.png');
   const {
     items = [],
     total_amount,
@@ -541,7 +596,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
       <div class="receipt-container">
         <!-- LOGO SECTION -->
         <div class="logo-container">
-          <img src="${origin}/b-logo.png" alt="Logo" class="logo-image" />
+          <img src="${logoUrl}" alt="Logo" class="logo-image" />
           <div class="center-text">Shally Vallay Chock</div>
         </div>
         <div class="center-text">---------------------------------</div>
@@ -707,7 +762,7 @@ const generateHTMLReceipt = (orderData, printStage) => {
         <!-- LOGO SECTION -->
         <div class="logo-container">
  
-          <img src="${origin}/b-logo.png" alt="Logo" class="logo-image" />
+          <img src="${logoUrl}" alt="Logo" class="logo-image" />
           <div class="center-text">Shally Vallay Chock</div>
         </div>
         <div class="center-text">---------------------------------</div>
@@ -815,15 +870,29 @@ export const printCombinedReceipt = (orderData) => {
     // Generate both receipts
     const kitchenReceipt = generateHTMLReceipt(orderData, 'kitchen');
     const customerReceipt = generateHTMLReceipt(orderData, 'customer');
-    const origin = window.location.origin;
+    // Keep asset URLs file://-safe for packaged builds
+    // (HTML uses the same `generateHTMLReceipt` which already resolves assets)
 
-    // Open single window (not _blank to avoid new tab)
-    const w = window.open("", "receiptPrintWindow");
+    // Create hidden iframe for printing (no popup window)
+    const iframeId = `print-iframe-${Date.now()}`;
+    const iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+    document.body.appendChild(iframe);
 
+    const w = iframe.contentWindow || iframe.contentDocument?.defaultView;
+    
     if (!w) {
-      console.error('Failed to open print window. Please allow popups.');
-      alert('Please allow popups to print receipts. Click OK to continue.');
-      resolve();
+      console.error('Failed to create print iframe.');
+      document.body.removeChild(iframe);
+      reject(new Error('Failed to create print iframe'));
       return;
     }
 
@@ -1095,6 +1164,8 @@ export const printCombinedReceipt = (orderData) => {
       <div class="cut-line"></div>
       ${customerReceipt}
       <script>
+        var iframeId = '${iframeId}';
+        var hasPrinted = false; // Guard flag to prevent multiple print calls
         window.onload = function() {
           var images = document.getElementsByTagName('img');
           var imagesToLoad = images.length;
@@ -1127,27 +1198,40 @@ export const printCombinedReceipt = (orderData) => {
             }
             
             setTimeout(function() {
-              if (imagesLoaded < imagesToLoad) {
+              if (imagesLoaded < imagesToLoad && !hasPrinted) {
                 printReceipt();
               }
             }, 2000);
           }
           
           function printReceipt() {
-            window.focus();
+            // Prevent multiple print calls
+            if (hasPrinted) {
+              return;
+            }
+            hasPrinted = true;
+            
             setTimeout(function() {
               window.print();
               var printCompleted = false;
-              var closeWindow = function() {
+              var cleanup = function() {
                 if (!printCompleted) {
                   printCompleted = true;
                   setTimeout(function() {
-                    window.close();
+                    // Remove iframe from DOM
+                    try {
+                      var iframe = window.frameElement || (window.parent && window.parent.document.getElementById(iframeId));
+                      if (iframe && iframe.parentNode) {
+                        iframe.parentNode.removeChild(iframe);
+                      }
+                    } catch(e) {
+                      // Iframe cleanup failed, parent will handle it
+                    }
                   }, 500);
                 }
               };
-              window.addEventListener('afterprint', closeWindow);
-              setTimeout(closeWindow, 2000);
+              window.addEventListener('afterprint', cleanup);
+              setTimeout(cleanup, 2000);
             }, 100);
           }
         };
@@ -1159,9 +1243,36 @@ export const printCombinedReceipt = (orderData) => {
     w.document.write(combinedHTML);
     w.document.close();
 
+    // Store iframe reference for cleanup
+    const cleanupIframe = () => {
+      if (iframe && iframe.parentNode) {
+        iframe.parentNode.removeChild(iframe);
+      }
+    };
+
+    // Guard flag to prevent multiple resolve calls
+    let hasResolved = false;
+
+    // The iframe's internal script handles printing via window.print()
+    // We just need to resolve the promise after a reasonable delay
+    // The iframe's internal script will handle its own cleanup
+    iframe.onload = () => {
+      // Resolve after a short delay to allow the iframe's print to trigger
+      setTimeout(() => {
+        if (!hasResolved) {
+          hasResolved = true;
+          resolve();
+        }
+      }, 500);
+    };
+
+    // Fallback: resolve promise even if onload doesn't fire
     setTimeout(() => {
-      resolve();
-    }, 100);
+      if (!hasResolved) {
+        hasResolved = true;
+        resolve();
+      }
+    }, 3000);
   });
 };
 
@@ -1240,6 +1351,8 @@ const Receipt = ({ orderData, printStage }) => {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength - 3) + '...';
   };
+
+  const logoUrl = getPublicAssetUrl('b-logo.png');
 
   // Screen preview styles
   const receiptStyle = {
@@ -1398,7 +1511,7 @@ const Receipt = ({ orderData, printStage }) => {
         <div style={{ textAlign: 'center', width: '100%', margin: '2px 0 3px 0' }}>
          
           <img 
-            src={process.env.PUBLIC_URL + '/b-logo.png'} 
+            src={logoUrl} 
             alt="Logo" 
             style={{ 
               maxWidth: '100%', 
@@ -1595,7 +1708,7 @@ const Receipt = ({ orderData, printStage }) => {
         {/* LOGO SECTION */}
         <div style={{ textAlign: 'center', width: '100%', margin: '2px 0 3px 0' }}>
           <img 
-            src={process.env.PUBLIC_URL + '/b-logo.png'} 
+            src={logoUrl} 
             alt="Logo" 
             style={{ 
               maxWidth: '100%', 

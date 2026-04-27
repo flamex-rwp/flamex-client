@@ -1,10 +1,33 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { ordersAPI, expensesAPI, API_BASE_URL } from '../services/api';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { ordersAPI, API_BASE_URL } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineModal from './OfflineModal';
+import ScreenLoading from './ScreenLoading';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter
+} from '../utils/filterSessionPersistence';
 import dayjs from 'dayjs';
 import jsPDF from 'jspdf';
+import {
+  FaChartBar,
+  FaMoneyBillWave,
+  FaUniversity,
+  FaFilePdf,
+  FaChartLine,
+  FaUtensils,
+  FaTruck,
+  FaCreditCard,
+  FaDollarSign,
+  FaUser,
+  FaPhone,
+  FaMapMarkerAlt
+} from 'react-icons/fa';
 
 const formatCurrency = (value) => {
   const amount = Number(value || 0);
@@ -12,53 +35,114 @@ const formatCurrency = (value) => {
   return `PKR ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 };
 
+const readAmount = (value) => {
+  if (value == null) return 0;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return Number(value) || 0;
+  if (typeof value === 'object' && value.amount != null) return Number(value.amount) || 0;
+  return 0;
+};
+
+const readOrdersCount = (value) => {
+  if (value == null) return 0;
+  if (typeof value === 'object') {
+    const orders = value.orders ?? value.count ?? value.totalOrders;
+    return Number(orders) || 0;
+  }
+  return 0;
+};
+
+const normalizeV2ResponseData = (responseData) => {
+  if (!responseData) return null;
+  if (responseData.success && responseData.data) return responseData.data;
+  if (responseData.data && (responseData.topSummary || responseData.orders)) return responseData;
+  if (responseData.data && typeof responseData.data === 'object') return responseData.data;
+  return responseData;
+};
+
+const EMPTY_ORDER_STATS = {
+  dineIn: {
+    totalOrders: 0,
+    totalRevenue: 0,
+    avgOrderValue: 0,
+    completedOrders: 0,
+    completedRevenue: 0,
+    cancelledOrders: 0,
+    cancelledRevenue: 0,
+    cashOrders: 0,
+    cashRevenue: 0,
+    bankOrders: 0,
+    bankRevenue: 0,
+    pendingPayments: { count: 0, total: 0 }
+  },
+  delivery: {
+    totalOrders: 0,
+    totalRevenue: 0,
+    avgOrderValue: 0,
+    completedOrders: 0,
+    completedRevenue: 0,
+    cancelledOrders: 0,
+    cancelledRevenue: 0,
+    cashOrders: 0,
+    cashRevenue: 0,
+    bankOrders: 0,
+    bankRevenue: 0,
+    pendingPayments: { count: 0, total: 0 }
+  },
+  combined: {
+    totalOrders: 0,
+    totalRevenue: 0,
+    avgOrderValue: 0,
+    completedOrders: 0,
+    completedRevenue: 0,
+    cancelledOrders: 0,
+    cancelledRevenue: 0,
+    cashOrders: 0,
+    cashRevenue: 0,
+    bankOrders: 0,
+    bankRevenue: 0
+  }
+};
+
 const DailySalesSummary = () => {
   const { showError } = useToast();
   const { online } = useOffline();
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
+  const initialDateFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.dailySalesSummary);
+    if (!s) {
+      return { dateFilter: 'today', startDate: null, endDate: null, showCustomRange: false };
+    }
+    return {
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange)
+    };
+  }, []);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [dateFilter, setDateFilter] = useState('today');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [dateFilter, setDateFilter] = useState(initialDateFilters.dateFilter);
+  const [startDate, setStartDate] = useState(initialDateFilters.startDate);
+  const [endDate, setEndDate] = useState(initialDateFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialDateFilters.showCustomRange);
 
   const [orders, setOrders] = useState([]);
-  const [expensesList, setExpensesList] = useState([]);
 
-  const [orderStats, setOrderStats] = useState({
-    dineIn: {
-      totalOrders: 0,
-      totalRevenue: 0,
-      avgOrderValue: 0,
-      completedOrders: 0,
-      completedRevenue: 0,
-      cashOrders: 0,
-      cashRevenue: 0,
-      bankOrders: 0,
-      bankRevenue: 0,
-      pendingPayments: { count: 0, total: 0 }
-    },
-    delivery: {
-      totalOrders: 0,
-      totalRevenue: 0,
-      avgOrderValue: 0,
-      completedOrders: 0,
-      completedRevenue: 0,
-      cashOrders: 0,
-      cashRevenue: 0,
-      bankOrders: 0,
-      bankRevenue: 0,
-      pendingPayments: { count: 0, total: 0 }
-    },
-    combined: {
-      totalOrders: 0,
-      totalRevenue: 0,
-      avgOrderValue: 0,
-      cashOrders: 0,
-      cashRevenue: 0,
-      bankOrders: 0,
-      bankRevenue: 0
-    }
+  const [orderStats, setOrderStats] = useState(EMPTY_ORDER_STATS);
+  const [summaryTop, setSummaryTop] = useState({
+    totalRevenueAmount: 0,
+    totalRevenueOrders: 0,
+    netProfitAmount: 0,
+    marginPercent: 0,
+    cashInHandsAmount: 0,
+    cashInHandsOrders: 0,
+    bankBalanceAmount: 0,
+    bankBalanceOrders: 0,
+    totalExpenseAmount: 0,
+    averageOrderValueAmount: 0,
   });
 
   const [expenses, setExpenses] = useState({
@@ -68,176 +152,13 @@ const DailySalesSummary = () => {
     count: 0
   });
 
-  const calculateOrderStats = useCallback((ordersData) => {
-    const stats = {
-      dineIn: {
-        totalOrders: 0,
-        totalRevenue: 0,
-        avgOrderValue: 0,
-        completedOrders: 0,
-        completedRevenue: 0,
-        cashOrders: 0,
-        cashRevenue: 0,
-        bankOrders: 0,
-        bankRevenue: 0,
-        pendingPayments: { count: 0, total: 0 }
-      },
-      delivery: {
-        totalOrders: 0,
-        totalRevenue: 0,
-        avgOrderValue: 0,
-        completedOrders: 0,
-        completedRevenue: 0,
-        cashOrders: 0,
-        cashRevenue: 0,
-        bankOrders: 0,
-        bankRevenue: 0,
-        pendingPayments: { count: 0, total: 0 }
-      },
-      combined: {
-        totalOrders: 0,
-        totalRevenue: 0,
-        avgOrderValue: 0,
-        cashOrders: 0,
-        cashRevenue: 0,
-        bankOrders: 0,
-        bankRevenue: 0
-      }
-    };
-
-    ordersData.forEach(order => {
-      // Handle both camelCase and snake_case property names
-      const amount = parseFloat(order.totalAmount || order.total_amount || 0);
-      const orderStatus = order.orderStatus || order.order_status || 'pending';
-      const orderType = order.orderType || order.order_type || 'dine_in';
-      const paymentMethod = order.paymentMethod || order.payment_method || 'cash';
-      const paymentStatus = order.paymentStatus || order.payment_status || 'pending';
-
-      // Combined stats
-      stats.combined.totalOrders += 1;
-      stats.combined.totalRevenue += amount;
-
-      if (paymentMethod === 'cash') {
-        stats.combined.cashOrders += 1;
-        stats.combined.cashRevenue += amount;
-      } else if (paymentMethod === 'bank_transfer') {
-        stats.combined.bankOrders += 1;
-        stats.combined.bankRevenue += amount;
-      }
-
-      // Order type specific stats
-      if (orderType === 'dine_in') {
-        stats.dineIn.totalOrders += 1;
-        stats.dineIn.totalRevenue += amount;
-
-        if (paymentMethod === 'cash') {
-          stats.dineIn.cashOrders += 1;
-          stats.dineIn.cashRevenue += amount;
-        } else if (paymentMethod === 'bank_transfer') {
-          stats.dineIn.bankOrders += 1;
-          stats.dineIn.bankRevenue += amount;
-        }
-
-        if (orderStatus === 'completed' || orderStatus === 'ready' || orderStatus === 'preparing') {
-          stats.dineIn.completedOrders += 1;
-          stats.dineIn.completedRevenue += amount;
-        }
-
-        if (paymentStatus === 'pending') {
-          stats.dineIn.pendingPayments.count += 1;
-          stats.dineIn.pendingPayments.total += amount;
-        }
-      }
-      else if (orderType === 'delivery') {
-        stats.delivery.totalOrders += 1;
-        stats.delivery.totalRevenue += amount;
-
-        if (paymentMethod === 'cash') {
-          stats.delivery.cashOrders += 1;
-          stats.delivery.cashRevenue += amount;
-        } else if (paymentMethod === 'bank_transfer') {
-          stats.delivery.bankOrders += 1;
-          stats.delivery.bankRevenue += amount;
-        }
-
-        if (orderStatus === 'completed' || orderStatus === 'delivered') {
-          stats.delivery.completedOrders += 1;
-          stats.delivery.completedRevenue += amount;
-        }
-
-        if (paymentStatus === 'pending') {
-          stats.delivery.pendingPayments.count += 1;
-          stats.delivery.pendingPayments.total += amount;
-        }
-      }
-    });
-
-    // Calculate averages
-    stats.dineIn.avgOrderValue = stats.dineIn.totalOrders > 0
-      ? stats.dineIn.totalRevenue / stats.dineIn.totalOrders
-      : 0;
-
-    stats.delivery.avgOrderValue = stats.delivery.totalOrders > 0
-      ? stats.delivery.totalRevenue / stats.delivery.totalOrders
-      : 0;
-
-    stats.combined.avgOrderValue = stats.combined.totalOrders > 0
-      ? stats.combined.totalRevenue / stats.combined.totalOrders
-      : 0;
-
-    return stats;
-  }, []);
-
-  const calculateExpenses = useCallback((expensesData, dateRange) => {
-    // Expenses should already be filtered by backend, but we'll do client-side filtering as backup
-    let filteredExpenses = expensesData || [];
-
-    // Use expenseDate if available, otherwise fall back to createdAt
-    filteredExpenses = filteredExpenses.filter(e => {
-      const expenseDateStr = e.expenseDate || e.expense_date || e.createdAt || e.created_at;
-      if (!expenseDateStr) return false;
-
-      const expenseDate = dayjs(expenseDateStr);
-
-      if (dateRange === 'today') {
-        return expenseDate.format('YYYY-MM-DD') === dayjs().format('YYYY-MM-DD');
-      } else if (dateRange === 'yesterday') {
-        return expenseDate.format('YYYY-MM-DD') === dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-      } else if (dateRange === 'this_week') {
-        const weekStart = dayjs().startOf('week');
-        return expenseDate.isAfter(weekStart.subtract(1, 'day'));
-      } else if (dateRange === 'this_month') {
-        const monthStart = dayjs().startOf('month');
-        return expenseDate.isAfter(monthStart.subtract(1, 'day'));
-      } else if (startDate && endDate) {
-        return expenseDate.isAfter(dayjs(startDate).subtract(1, 'day')) &&
-          expenseDate.isBefore(dayjs(endDate).add(1, 'day'));
-      }
-      return true; // If no date filter, include all
-    });
-
-    // Calculate totals
-    const totalExpenses = filteredExpenses.reduce((sum, e) =>
-      sum + parseFloat(e.amount || 0), 0
-    );
-
-    const cashExpenses = filteredExpenses
-      .filter(e => (e.paymentMethod || e.payment_method) === 'cash')
-      .reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
-
-    const bankExpenses = filteredExpenses
-      .filter(e => (e.paymentMethod || e.payment_method) === 'bank_transfer')
-      .reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
-
-    return {
-      total: totalExpenses,
-      cash: cashExpenses,
-      bank: bankExpenses,
-      count: filteredExpenses.length
-    };
-  }, [startDate, endDate]);
+  // Avoid full-page unmount "blink" when changing filters:
+  // show full-screen loading only on the first load, and use an overlay afterwards.
+  const hasLoadedOnceRef = useRef(false);
+  const loadingMinDurationMs = 300;
 
   const fetchData = useCallback(async () => {
+    const startedAt = Date.now();
     setLoading(true);
     setError('');
 
@@ -246,10 +167,15 @@ const DailySalesSummary = () => {
       const params = {};
 
       if (dateFilter === 'today') {
+        // Use business day date (4 AM boundary) only for logging / reference.
+        // We still pass calendar dates to backend, and apply 4 AM logic client-side.
         const today = dayjs().format('YYYY-MM-DD');
         params.startDate = today;
         params.endDate = today;
-        console.log('Today filter - Date range:', { startDate: params.startDate, endDate: params.endDate, today });
+        console.log('Today filter (business day 4AM) - Calendar range:', {
+          startDate: params.startDate,
+          endDate: params.endDate
+        });
       } else if (dateFilter === 'yesterday') {
         const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
         params.startDate = yesterday;
@@ -263,78 +189,94 @@ const DailySalesSummary = () => {
         params.startDate = monthStart;
         params.endDate = dayjs().format('YYYY-MM-DD');
       } else if (dateFilter === 'custom' && startDate && endDate) {
-        params.startDate = startDate;
-        params.endDate = endDate;
+        // Ensure dates are in YYYY-MM-DD format for IPC
+        params.startDate = dayjs(startDate).format('YYYY-MM-DD');
+        params.endDate = dayjs(endDate).format('YYYY-MM-DD');
+      } else if (dateFilter === 'custom') {
+        const t = dayjs().format('YYYY-MM-DD');
+        params.startDate = t;
+        params.endDate = t;
       }
 
-      // Fetch orders and expenses in parallel
-      // Increase limit to get all orders and expenses in date range
-      const ordersParams = { ...params, limit: 10000 };
-      const expensesParams = { ...params, limit: 10000 };
-      const [ordersResponse, expensesResponse] = await Promise.all([
-        ordersAPI.getAll(ordersParams),  // Use the correct endpoint with query params
-        expensesAPI.getAll(expensesParams) // Pass date params to expenses API as well
-      ]);
+      const summaryResponse = await ordersAPI.getOrderStatisticsV2(params);
+      const summaryData = normalizeV2ResponseData(summaryResponse?.data);
 
-      // Handle orders data - Use the correct response structure
-      // Axios returns the response in .data, and our API wraps response in success/data envelope
-      const ordersPayload = ordersResponse.data;
+      const topSummary = summaryData?.topSummary || {};
+      const orderTypeBreakdown = summaryData?.orderTypeBreakdown || {};
+      const paymentMethodBreakdown = summaryData?.paymentMethodBreakdown || {};
+      const expensesBreakdown = summaryData?.expensesBreakdown || {};
 
-      if (ordersPayload && ordersPayload.success && ordersPayload.data) {
-        // API response format: { success: true, data: { orders: [...], total: ..., page: ... } }
-        const ordersData = ordersPayload.data.orders || [];
+      const safeDineIn = orderTypeBreakdown.dineIn || {};
+      const safeDelivery = orderTypeBreakdown.delivery || {};
+      const safeCash = paymentMethodBreakdown.cash || {};
+      const safeBank = paymentMethodBreakdown.bank || {};
 
-        // Ensure we have an array
-        const ordersArray = Array.isArray(ordersData) ? ordersData : [];
+      const totalRevenueAmount = readAmount(topSummary.totalRevenue);
+      const totalRevenueOrders = readOrdersCount(topSummary.totalRevenue);
+      const netProfitAmount = readAmount(topSummary.netProfit);
+      const marginPercent = Number(topSummary?.netProfit?.marginPercent) || 0;
+      const cashInHandsAmount = readAmount(topSummary.cashInHands);
+      const cashInHandsOrders = readOrdersCount(topSummary.cashInHands);
+      const bankBalanceAmount = readAmount(topSummary.bankBalance);
+      const bankBalanceOrders = readOrdersCount(topSummary.bankBalance);
+      const totalExpenseAmount = readAmount(topSummary.totalExpense);
+      const averageOrderValueAmount = readAmount(topSummary.averageOrderValue);
 
-        // Backend should already filter by date correctly, but keep minimal client-side validation
-        const filteredOrders = ordersArray.filter(order => {
-          if (!params.startDate || !params.endDate) return true;
-          const orderDate = dayjs(order.createdAt || order.created_at);
-          const start = dayjs(params.startDate).startOf('day');
-          const end = dayjs(params.endDate).endOf('day');
-          // Check if order date is within range (inclusive of start and end days)
-          const isAfterStart = orderDate.isAfter(start) || orderDate.isSame(start, 'day');
-          const isBeforeEnd = orderDate.isBefore(end) || orderDate.isSame(end, 'day');
-          return isAfterStart && isBeforeEnd;
-        });
+      setSummaryTop({
+        totalRevenueAmount,
+        totalRevenueOrders,
+        netProfitAmount,
+        marginPercent,
+        cashInHandsAmount,
+        cashInHandsOrders,
+        bankBalanceAmount,
+        bankBalanceOrders,
+        totalExpenseAmount,
+        averageOrderValueAmount,
+      });
 
-        setOrders(filteredOrders);
+      const mapBreakdown = (b) => ({
+        totalOrders: Number(b.totalOrders) || 0,
+        totalRevenue: readAmount(b.totalRevenue),
+        avgOrderValue: readAmount(b.avgOrderValue),
+        completedOrders: Number(b.completedOrders) || 0,
+        completedRevenue: readAmount(b.completedAmount ?? b.completedRevenue),
+        cancelledOrders: Number(b.cancelledOrders) || 0,
+        cancelledRevenue: readAmount(b.cancelledAmount ?? b.cancelledRevenue),
+        cashOrders: Number(b.cashOrders) || 0,
+        cashRevenue: readAmount(b.cashAmount ?? b.cashRevenue),
+        bankOrders: Number(b.bankOrders) || 0,
+        bankRevenue: readAmount(b.bankAmount ?? b.bankRevenue),
+        pendingPayments: { count: 0, total: 0 },
+      });
 
-        // Calculate stats from orders
-        const calculatedStats = calculateOrderStats(filteredOrders);
-        setOrderStats(calculatedStats);
-      } else {
-        console.error('Orders API response unsuccessful:', ordersResponse);
-        console.error('Orders payload:', ordersPayload);
-        // Don't throw if we just got empty data format we didn't expect, try to graceful fail
-        setOrders([]);
-        setOrderStats({
-          dineIn: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, completedOrders: 0, completedRevenue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0, pendingPayments: { count: 0, total: 0 } },
-          delivery: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, completedOrders: 0, completedRevenue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0, pendingPayments: { count: 0, total: 0 } },
-          combined: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0 }
-        });
-      }
+      setOrderStats({
+        dineIn: mapBreakdown(safeDineIn),
+        delivery: mapBreakdown(safeDelivery),
+        combined: {
+          totalOrders: totalRevenueOrders,
+          totalRevenue: totalRevenueAmount,
+          avgOrderValue: averageOrderValueAmount,
+          completedOrders: totalRevenueOrders,
+          completedRevenue: totalRevenueAmount,
+          cancelledOrders: 0,
+          cancelledRevenue: 0,
+          cashOrders: Number(safeCash.orders) || 0,
+          cashRevenue: readAmount(safeCash.amount),
+          bankOrders: Number(safeBank.orders) || 0,
+          bankRevenue: readAmount(safeBank.amount),
+        },
+      });
 
-      // Handle expenses data
-      const expensesPayload = expensesResponse.data;
-      if (expensesPayload && (expensesPayload.success || Array.isArray(expensesPayload))) {
-        // Extract expenses from response
-        const expensesData = expensesPayload.data?.expenses || expensesPayload.data || expensesPayload.expenses || [];
+      setExpenses({
+        total: readAmount(expensesBreakdown.totalExpenses),
+        cash: readAmount(expensesBreakdown.cashExpenses),
+        bank: readAmount(expensesBreakdown.bankExpenses),
+        count: Number(expensesBreakdown.count) || 0,
+      });
 
-        // Ensure we have an array
-        const expensesArray = Array.isArray(expensesData) ? expensesData : [];
-
-        setExpensesList(expensesArray);
-
-        const calculatedExpenses = calculateExpenses(expensesArray, dateFilter);
-        setExpenses(calculatedExpenses);
-      } else {
-        console.error('Expenses API response unsuccessful:', expensesResponse);
-        // Graceful fallback
-        setExpensesList([]);
-        setExpenses({ total: 0, cash: 0, bank: 0, count: 0 });
-      }
+      const ordersArray = Array.isArray(summaryData?.orders) ? summaryData.orders : [];
+      setOrders(ordersArray);
     } catch (err) {
       console.error('Failed to load summary data', err);
 
@@ -349,20 +291,34 @@ const DailySalesSummary = () => {
         }
       } else {
         // Network error - set empty data gracefully, don't show toast
-        setOrders([]);
-        setOrderStats({
-          dineIn: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, completedOrders: 0, completedRevenue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0, pendingPayments: { count: 0, total: 0 } },
-          delivery: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, completedOrders: 0, completedRevenue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0, pendingPayments: { count: 0, total: 0 } },
-          combined: { totalOrders: 0, totalRevenue: 0, avgOrderValue: 0, cashOrders: 0, cashRevenue: 0, bankOrders: 0, bankRevenue: 0 }
-        });
-        setExpensesList([]);
+      setOrders([]);
+      setOrderStats(EMPTY_ORDER_STATS);
         setExpenses({ total: 0, cash: 0, bank: 0, count: 0 });
+        setSummaryTop({
+          totalRevenueAmount: 0,
+          totalRevenueOrders: 0,
+          netProfitAmount: 0,
+          marginPercent: 0,
+          cashInHandsAmount: 0,
+          cashInHandsOrders: 0,
+          bankBalanceAmount: 0,
+          bankBalanceOrders: 0,
+          totalExpenseAmount: 0,
+          averageOrderValueAmount: 0,
+        });
         setError(''); // Clear error for network issues
       }
     } finally {
-      setLoading(false);
+      const elapsed = Date.now() - startedAt;
+      const remaining = loadingMinDurationMs - elapsed;
+      if (remaining > 0) {
+        setTimeout(() => setLoading(false), remaining);
+      } else {
+        setLoading(false);
+      }
+      hasLoadedOnceRef.current = true;
     }
-  }, [dateFilter, startDate, endDate, calculateOrderStats, calculateExpenses]);
+  }, [dateFilter, startDate, endDate, showError]);
 
   useEffect(() => {
     // Log backend server URL being used
@@ -376,16 +332,19 @@ const DailySalesSummary = () => {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.dailySalesSummary, {
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange
+    });
+  }, [dateFilter, startDate, endDate, showCustomRange]);
+
   const handleQuickFilter = (filter) => {
     if (filter === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      } else {
-        setDateFilter('today');
-        setStartDate(null);
-        setEndDate(null);
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
       setDateFilter(filter);
       setStartDate(null);
@@ -401,13 +360,37 @@ const DailySalesSummary = () => {
     setShowCustomRange(false);
   };
 
+  const clearAppliedCustomRange = useCallback(() => {
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
+
+  const getOrderStatusColor = (status) => {
+    const colors = {
+      pending: { background: '#e2e3e5', color: '#383d41' },
+      preparing: { background: '#fff3cd', color: '#856404' },
+      ready: { background: '#cfe2ff', color: '#084298' },
+      out_for_delivery: { background: '#cfe2ff', color: '#084298' },
+      delivered: { background: '#d4edda', color: '#155724' },
+      completed: { background: '#d4edda', color: '#155724' },
+      cancelled: { background: '#f8d7da', color: '#721c24' }
+    };
+    return colors[status] || colors.pending;
+  };
+
+  const getPaymentStatusColor = (status) => {
+    return status === 'completed'
+      ? { background: '#e6ffed', color: '#198754' }
+      : { background: '#fff4d8', color: '#7c2d12' };
+  };
+
   // Calculate derived metrics
-  const netProfit = orderStats.combined.totalRevenue - expenses.total;
-  const cashInHand = Math.max(0, orderStats.combined.cashRevenue - expenses.cash);
-  const bankBalance = Math.max(0, orderStats.combined.bankRevenue - expenses.bank);
-  const profitMargin = orderStats.combined.totalRevenue > 0
-    ? ((netProfit / orderStats.combined.totalRevenue) * 100).toFixed(1)
-    : 0;
+  const netProfit = summaryTop.netProfitAmount;
+  const cashInHand = summaryTop.cashInHandsAmount;
+  const bankBalance = summaryTop.bankBalanceAmount;
+  const profitMargin = Number(summaryTop.marginPercent || 0).toFixed(1);
 
   const getDateRangeText = () => {
     if (startDate && endDate) {
@@ -613,16 +596,12 @@ const DailySalesSummary = () => {
   };
 
   // Show offline modal if offline
-  if (!online) {
+  if (!online && !isElectron) {
     return <OfflineModal title="Daily Sales Summary - Offline" />;
   }
 
   if (loading) {
-    return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Loading...</div>
-      </div>
-    );
+    return <ScreenLoading label="Loading sales summary..." />;
   }
 
   return (
@@ -630,7 +609,7 @@ const DailySalesSummary = () => {
       {/* Header */}
       <div style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.5rem', color: '#1f2937' }}>
-          📊 Sales Summary
+          <FaChartBar style={{ marginRight: '0.5rem' }} /> Sales Summary
         </h1>
         <p style={{ color: '#6b7280', fontSize: '0.95rem' }}>
           Comprehensive overview of sales, expenses, and profitability for {getDateRangeText()}
@@ -738,7 +717,7 @@ const DailySalesSummary = () => {
               marginLeft: 'auto'
             }}
           >
-            📄 Export PDF
+            <FaFilePdf style={{ marginRight: '0.5rem' }} /> Export PDF
           </button>
         </div>
         {/* Custom Date Range Input */}
@@ -794,7 +773,6 @@ const DailySalesSummary = () => {
               onClick={() => {
                 if (startDate && endDate && dayjs(startDate).isBefore(dayjs(endDate).add(1, 'day'))) {
                   handleDateFilterChange(startDate, endDate);
-                  fetchData();
                 }
               }}
               disabled={!startDate || !endDate || dayjs(startDate).isAfter(dayjs(endDate))}
@@ -814,20 +792,19 @@ const DailySalesSummary = () => {
             </button>
           </div>
         )}
-        {/* Active Range Display */}
-        {(dateFilter === 'custom' && startDate && endDate) && (
-          <div style={{
-            marginTop: '0.75rem',
-            padding: '0.5rem 0.75rem',
-            background: '#fff4d8',
-            borderRadius: '6px',
-            fontSize: '0.85rem',
-            color: '#856404',
-            fontWeight: '600'
-          }}>
-            📅 Active Range: {dayjs(startDate).format('MMM D, YYYY')} - {dayjs(endDate).format('MMM D, YYYY')}
-          </div>
-        )}
+        <AppliedFiltersBanner
+          items={
+            isCustomDateRangeApplied(dateFilter, startDate, endDate)
+              ? [
+                  {
+                    id: 'date',
+                    label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+                    onRemove: clearAppliedCustomRange
+                  }
+                ]
+              : []
+          }
+        />
       </div>
 
       {/* Summary Cards Grid */}
@@ -871,10 +848,10 @@ const DailySalesSummary = () => {
         }}>
           <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Total Revenue</div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
-            {formatCurrency(orderStats.combined.totalRevenue)}
+            {formatCurrency(summaryTop.totalRevenueAmount)}
           </div>
           <div style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            {orderStats.combined.totalOrders} orders
+            {summaryTop.totalRevenueOrders} orders
           </div>
         </div>
 
@@ -913,12 +890,12 @@ const DailySalesSummary = () => {
           flexDirection: 'column',
           justifyContent: 'space-between'
         }}>
-          <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>💵 Cash in Hand</div>
+          <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaMoneyBillWave /> Cash in Hand</div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
             {formatCurrency(cashInHand)}
           </div>
           <div style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            {orderStats.combined.cashOrders} cash orders
+            {summaryTop.cashInHandsOrders} orders
           </div>
         </div>
 
@@ -934,12 +911,12 @@ const DailySalesSummary = () => {
           flexDirection: 'column',
           justifyContent: 'space-between'
         }}>
-          <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🏦 Bank Balance</div>
+          <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaUniversity /> Bank Balance</div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
             {formatCurrency(bankBalance)}
           </div>
           <div style={{ fontSize: '1.1rem', opacity: 0.9 }}>
-            {orderStats.combined.bankOrders} bank orders
+            {summaryTop.bankBalanceOrders} orders
           </div>
         </div>
 
@@ -955,7 +932,7 @@ const DailySalesSummary = () => {
           flexDirection: 'column',
           justifyContent: 'space-between'
         }}>
-          <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>💸 Total Expenses</div>
+          <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FaDollarSign /> Total Expenses</div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
             {formatCurrency(expenses.total)}
           </div>
@@ -978,7 +955,7 @@ const DailySalesSummary = () => {
         }}>
           <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>Average Order Value</div>
           <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
-            {formatCurrency(orderStats.combined.avgOrderValue)}
+            {formatCurrency(summaryTop.averageOrderValueAmount)}
           </div>
           <div style={{ fontSize: '1.1rem', opacity: 0.9 }}>
             Per order
@@ -995,7 +972,7 @@ const DailySalesSummary = () => {
         marginBottom: '2rem'
       }}>
         <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#1f2937' }}>
-          📈 Breakdown by Order Type
+          <FaChartLine style={{ marginRight: '0.5rem' }} /> Breakdown by Order Type
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
           {/* Dine-In Stats */}
@@ -1006,7 +983,7 @@ const DailySalesSummary = () => {
             border: '2px solid #2196f3'
           }}>
             <h3 style={{ margin: '0 0 1rem 0', color: '#1976d2', fontSize: '1.2rem', fontWeight: 'bold' }}>
-              🍽️ Dine-In Orders
+              <FaUtensils style={{ marginRight: '0.5rem' }} /> Dine-In Orders
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1044,7 +1021,7 @@ const DailySalesSummary = () => {
             border: '2px solid #ff9800'
           }}>
             <h3 style={{ margin: '0 0 1rem 0', color: '#f57c00', fontSize: '1.2rem', fontWeight: 'bold' }}>
-              🚚 Delivery Orders
+              <FaTruck style={{ marginRight: '0.5rem' }} /> Delivery Orders
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1085,7 +1062,7 @@ const DailySalesSummary = () => {
         marginBottom: '2rem'
       }}>
         <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#1f2937' }}>
-          💳 Payment Method Breakdown
+          <FaCreditCard style={{ marginRight: '0.5rem' }} /> Payment Method Breakdown
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
           <div style={{
@@ -1095,7 +1072,7 @@ const DailySalesSummary = () => {
             border: '2px solid #ffc107'
           }}>
             <h3 style={{ margin: '0 0 0.75rem 0', color: '#856404', fontSize: '1.1rem', fontWeight: 'bold' }}>
-              💵 Cash Payments
+              <FaMoneyBillWave style={{ marginRight: '0.5rem' }} /> Cash Payments
             </h3>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#856404', marginBottom: '0.5rem' }}>
               {formatCurrency(orderStats.combined.cashRevenue || 0)}
@@ -1111,7 +1088,7 @@ const DailySalesSummary = () => {
             border: '2px solid #17a2b8'
           }}>
             <h3 style={{ margin: '0 0 0.75rem 0', color: '#0c5460', fontSize: '1.1rem', fontWeight: 'bold' }}>
-              🏦 Bank Transfer
+              <FaUniversity style={{ marginRight: '0.5rem' }} /> Bank Transfer
             </h3>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#0c5460', marginBottom: '0.5rem' }}>
               {formatCurrency(orderStats.combined.bankRevenue || 0)}
@@ -1132,7 +1109,7 @@ const DailySalesSummary = () => {
         marginBottom: '2rem'
       }}>
         <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem', color: '#1f2937' }}>
-          💸 Expenses Breakdown
+          <FaDollarSign style={{ marginRight: '0.5rem' }} /> Expenses Breakdown
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
           <div style={{
@@ -1158,7 +1135,7 @@ const DailySalesSummary = () => {
             border: '2px solid #ffc107'
           }}>
             <h3 style={{ margin: '0 0 0.75rem 0', color: '#856404', fontSize: '1.1rem', fontWeight: 'bold' }}>
-              💵 Cash Expenses
+              <FaMoneyBillWave style={{ marginRight: '0.5rem' }} /> Cash Expenses
             </h3>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#856404', marginBottom: '0.5rem' }}>
               {formatCurrency(expenses.cash)}
@@ -1171,13 +1148,181 @@ const DailySalesSummary = () => {
             border: '2px solid #17a2b8'
           }}>
             <h3 style={{ margin: '0 0 0.75rem 0', color: '#0c5460', fontSize: '1.1rem', fontWeight: 'bold' }}>
-              🏦 Bank Expenses
+              <FaUniversity style={{ marginRight: '0.5rem' }} /> Bank Expenses
             </h3>
             <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#0c5460', marginBottom: '0.5rem' }}>
               {formatCurrency(expenses.bank)}
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Orders List (matches history view for quick inspection) */}
+      <div style={{
+        background: 'white',
+        padding: '1.5rem',
+        borderRadius: '12px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+        marginBottom: '2rem'
+      }}>
+        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>
+          Orders ({orders.length})
+        </h2>
+
+        {orders.length === 0 ? (
+          <div style={{ padding: '1rem', color: '#6b7280' }}>No orders for the selected range.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            {orders.map(order => {
+              const orderType = order.order_type || order.orderType;
+              const orderStatus = (order.order_status || order.orderStatus || '').toLowerCase();
+              const paymentStatus = (order.payment_status || order.paymentStatus || '').toLowerCase();
+              const deliveryStatus = (order.delivery_status || order.deliveryStatus || '').toLowerCase();
+              const paymentMethod = order.payment_method || order.paymentMethod;
+              const items = order.items || order.orderItems || order.order_items;
+
+              return (
+                <div key={order.id} style={{
+                  padding: '1rem',
+                  borderRadius: '10px',
+                  border: orderType === 'delivery' ? '2px solid #dc3545' : '2px solid #28a745',
+                  background: '#f8f9fa'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                      <h3 style={{ margin: 0, color: '#2d3748' }}>
+                        Order #{order.order_number || order.orderNumber || order.id}{' '}
+                        <span style={{ fontWeight: 400, color: '#6b7280' }}>
+                          ({orderType === 'delivery' ? 'Delivery' : 'Dine-In'})
+                        </span>
+                      </h3>
+                      <div style={{ color: '#6b7280', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                        {dayjs(order.created_at || order.createdAt).format('MMM D, YYYY h:mm A')}
+                      </div>
+
+                      {orderType === 'dine_in' && (order.table_number || order.tableNumber) && (
+                        <div style={{ marginTop: '0.25rem', fontWeight: 600, color: '#2d3748' }}>
+                          <FaUtensils style={{ marginRight: '0.35rem' }} />
+                          Table #{order.table_number || order.tableNumber}
+                        </div>
+                      )}
+
+                      {orderType === 'delivery' && (
+                        <div style={{ marginTop: '0.35rem', color: '#2d3748' }}>
+                          {(order.customer_name || order.customer?.name) && (
+                            <div style={{ fontWeight: 600 }}>
+                              <FaUser style={{ marginRight: '0.35rem' }} />
+                              {order.customer_name || order.customer?.name}
+                            </div>
+                          )}
+                          {(order.customer_phone || order.customer?.phone) && (
+                            <div style={{ color: '#6b7280', fontSize: '0.9rem' }}>
+                              <FaPhone style={{ marginRight: '0.35rem' }} />
+                              {order.customer_phone || order.customer?.phone}
+                            </div>
+                          )}
+                          {order.delivery_address && (
+                            <div style={{ color: '#6b7280', fontSize: '0.9rem', marginTop: '0.15rem' }}>
+                              <FaMapMarkerAlt style={{ marginRight: '0.35rem' }} />
+                              {order.delivery_address}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {orderStatus && (
+                          <div style={{
+                            padding: '0.25rem 0.7rem',
+                            borderRadius: '14px',
+                            background: getOrderStatusColor(orderStatus).background,
+                            color: getOrderStatusColor(orderStatus).color,
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            textTransform: 'capitalize'
+                          }}>
+                            Order: {orderStatus.replace(/_/g, ' ')}
+                          </div>
+                        )}
+                        {deliveryStatus && orderType === 'delivery' && (
+                          <div style={{
+                            padding: '0.25rem 0.7rem',
+                            borderRadius: '14px',
+                            background: getOrderStatusColor(deliveryStatus).background,
+                            color: getOrderStatusColor(deliveryStatus).color,
+                            fontSize: '0.8rem',
+                            fontWeight: 600,
+                            textTransform: 'capitalize'
+                          }}>
+                            Delivery: {deliveryStatus.replace(/_/g, ' ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'right', minWidth: '200px' }}>
+                      <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: 'var(--color-primary)' }}>
+                        {formatCurrency(order.total_amount || order.totalAmount)}
+                      </div>
+                      {(order.delivery_charge || order.deliveryCharge) > 0 && (
+                        <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>
+                          Delivery: {formatCurrency(order.delivery_charge || order.deliveryCharge)}
+                        </div>
+                      )}
+                      <div style={{
+                        marginTop: '0.35rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: '999px',
+                        lineHeight: 1.1,
+                        ...(() => {
+                          const isCancelled = orderStatus === 'cancelled' || paymentStatus === 'cancelled';
+                          if (isCancelled) {
+                            return { background: '#fee2e2', color: '#dc2626' };
+                          }
+                          return getPaymentStatusColor(paymentStatus);
+                        })()
+                      }}>
+                        {(() => {
+                          const isPaymentCancelled = paymentStatus === 'cancelled';
+                          const isOrderCancelled = orderStatus === 'cancelled';
+                          const isCancelled = isOrderCancelled || isPaymentCancelled;
+                          const isPaid = paymentStatus === 'completed';
+                          if (isCancelled) {
+                            return isPaymentCancelled ? 'Payment Cancelled' : 'Cancelled';
+                          }
+                          return isPaid ? 'Paid' : 'Pending';
+                        })()}
+                      </div>
+                      {paymentMethod && (
+                        <div style={{ marginTop: '0.2rem', fontSize: '0.9rem', color: '#6b7280' }}>
+                          {paymentMethod === 'cash' ? 'Cash' : 'Bank Transfer'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{
+                    marginTop: '0.75rem',
+                    padding: '0.75rem',
+                    background: 'white',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb',
+                    color: '#4b5563',
+                    fontSize: '0.9rem'
+                  }}>
+                    <strong>Items:</strong>{' '}
+                    {Array.isArray(items) && items.length > 0
+                      ? items.map(i => `${i.menuItem?.name || i.name || i.item_name || 'Item'} (x${i.quantity || 1})`).join(', ')
+                      : (typeof items === 'string' ? items : 'No items')}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {error && (

@@ -60,9 +60,20 @@ export const StatCardSkeleton = ({ count = 4 }) => {
  * Generic loading spinner
  */
 export const Spinner = ({ size = 'md', className = '' }) => {
+  // Keep the same "sm" stroke look for all sizes,
+  // while still allowing the overall diameter to scale.
+  const px =
+    size === 'lg' ? 60 :
+    size === 'md' ? 40 :
+    20;
   return (
-    <div className={`spinner spinner-${size} ${className}`} role="status" aria-label="Loading">
-      <div className="spinner-circle" />
+    <div
+      className={`spinner ${className}`}
+      role="status"
+      aria-label="Loading"
+      style={{ width: px, height: px }}
+    >
+      <div className="spinner-circle" style={{ width: px, height: px, borderWidth: 2 }} />
     </div>
   );
 };

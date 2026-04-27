@@ -9,10 +9,6 @@ import {
   FaShoppingCart,
   FaUtensils,
   FaTruck,
-  FaChartBar,
-  FaHistory,
-  FaBox,
-  FaUsers,
   FaSignOutAlt,
   FaBars,
   FaTimes,
@@ -21,26 +17,18 @@ import {
   FaSync
 } from 'react-icons/fa';
 
-// Lazy load heavy components
-const OrderHistory = lazy(() => import('./OrderHistory'));
-// Expenses are admin-only; manager portal does not load ExpenseHistory.
-const DailySalesSummary = lazy(() => import('./DailySalesSummary'));
-const ItemsSalesReport = lazy(() => import('./ItemsSalesReport'));
-const DeliveryReports = lazy(() => import('./DeliveryReports'));
 const DineInOrders = lazy(() => import('./DineInOrders'));
 const DeliveryOrders = lazy(() => import('./DeliveryOrders'));
-const CustomerManagement = lazy(() => import('./CustomerManagement'));
 
-// Lazy load heavy components
+const STAFF_BASE = '/staff';
 
 function NavLink({ to, children, badgeCount = 0, onClick }) {
   const location = useLocation();
   const isActive =
     location.pathname === to ||
-    (to === '/manager/orders' && (location.pathname === '/manager' || location.pathname === '/manager/'));
+    (to === `${STAFF_BASE}/orders` && (location.pathname === STAFF_BASE || location.pathname === `${STAFF_BASE}/`));
   const badgeNum = Number(badgeCount) || 0;
   const showBadge = badgeNum > 0;
-
 
   return (
     <Link to={to} onClick={onClick} className={`nav-link ${isActive ? 'active' : ''} ${showBadge ? 'has-badge' : ''}`}>
@@ -50,7 +38,7 @@ function NavLink({ to, children, badgeCount = 0, onClick }) {
   );
 }
 
-const ManagerPortal = ({ user, onLogout }) => {
+const StaffPortal = ({ user, onLogout }) => {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navLinksRef = useRef(null);
@@ -65,19 +53,6 @@ const ManagerPortal = ({ user, onLogout }) => {
 
   const handleLogout = async () => {
     try {
-      // Clear any session-only persisted cart state for this user
-      try {
-        const rawUser = localStorage.getItem('user');
-        if (rawUser) {
-          const parsed = JSON.parse(rawUser);
-          const userId = parsed?.id ?? parsed?.userId ?? parsed?._id;
-          if (userId !== null && userId !== undefined && String(userId).trim() !== '') {
-            sessionStorage.removeItem(`pos:carts:${String(userId)}`);
-          }
-        }
-        sessionStorage.removeItem('pos:carts:anonymous');
-      } catch (e) {}
-
       await authAPI.logout();
       onLogout();
     } catch (err) {
@@ -85,8 +60,7 @@ const ManagerPortal = ({ user, onLogout }) => {
     }
   };
 
-  // Check if current route is orders page
-  const fullScreenRoutes = ['/manager', '/manager/', '/manager/orders'];
+  const fullScreenRoutes = [STAFF_BASE, `${STAFF_BASE}/`, `${STAFF_BASE}/orders`];
   const isFullScreen = fullScreenRoutes.includes(location.pathname);
 
   const updateScrollState = () => {
@@ -118,58 +92,38 @@ const ManagerPortal = ({ user, onLogout }) => {
   }, []);
 
   useEffect(() => {
-    // Re-evaluate on route change
     updateScrollState();
   }, [location.pathname]);
 
   const fetchPendingBadges = useCallback(async () => {
     let dineInCount = 0;
     let deliveryCount = 0;
-
-    // Get today's date in YYYY-MM-DD format for badge counts
     const today = new Date().toISOString().split('T')[0];
 
-    // Online stats (best effort) - only count today's pending orders
     try {
       const dineRes = await ordersAPI.getDineInStats({ filter: 'today', startDate: today, endDate: today, status: 'pending' });
       const dineData = dineRes.data?.data ?? dineRes.data ?? {};
       dineInCount = dineData.pendingOrders ?? 0;
-    } catch (err) {
-      // Silently handle errors
-    }
+    } catch (err) {}
 
     try {
-      // Fetch today's delivery stats only
       const delRes = await ordersAPI.getDeliveryStats({ filter: 'today', startDate: today, endDate: today, status: 'pending' });
       const delData = delRes.data?.data ?? delRes.data ?? {};
       deliveryCount = delData.pendingOrders ?? 0;
-    } catch (err) {
-      // Silently handle errors
-    }
+    } catch (err) {}
 
-    const finalDineInCount = Number(dineInCount) || 0;
-    const finalDeliveryCount = Number(deliveryCount) || 0;
     setPendingBadges({
-      dineIn: finalDineInCount,
-      delivery: finalDeliveryCount,
+      dineIn: Number(dineInCount) || 0,
+      delivery: Number(deliveryCount) || 0,
     });
   }, []);
 
   useEffect(() => {
     fetchPendingBadges();
     const interval = setInterval(fetchPendingBadges, 15000);
-
-    // Listen for order creation/update events to refresh badges immediately
-    const handleOrderCreated = (event) => {
-      // Small delay to ensure order is saved/processed
-      setTimeout(() => {
-        fetchPendingBadges();
-      }, 500);
-    };
-
+    const handleOrderCreated = () => setTimeout(() => fetchPendingBadges(), 500);
     window.addEventListener('orderCreated', handleOrderCreated);
     window.addEventListener('orderUpdated', handleOrderCreated);
-
     return () => {
       clearInterval(interval);
       window.removeEventListener('orderCreated', handleOrderCreated);
@@ -177,7 +131,6 @@ const ManagerPortal = ({ user, onLogout }) => {
     };
   }, [fetchPendingBadges]);
 
-  // Fetch next sync time
   useEffect(() => {
     const fetchNextSyncTime = async () => {
       if (typeof window !== 'undefined' && window.electronAPI) {
@@ -191,63 +144,47 @@ const ManagerPortal = ({ user, onLogout }) => {
         }
       }
     };
-
     fetchNextSyncTime();
-    const interval = setInterval(fetchNextSyncTime, 60000); // Update every minute
-
+    const interval = setInterval(fetchNextSyncTime, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // Update timer display every second
   useEffect(() => {
     if (!nextSyncTime) return;
-
     const updateTimer = () => {
       const now = new Date();
       const diff = nextSyncTime.getTime() - now.getTime();
-      
-      if (diff <= 0) {
-        // Sync time passed, fetch next one
-        if (typeof window !== 'undefined' && window.electronAPI) {
-          window.electronAPI.sync.getNextSyncTime().then((response) => {
-            if (response.success) {
-              setNextSyncTime(new Date(response.data.nextSyncTime));
-            }
-          });
-        }
+      if (diff <= 0 && typeof window !== 'undefined' && window.electronAPI) {
+        window.electronAPI.sync.getNextSyncTime().then((response) => {
+          if (response.success) {
+            setNextSyncTime(new Date(response.data.nextSyncTime));
+          }
+        });
       }
     };
-
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
   }, [nextSyncTime]);
 
   const formatTimeUntilSync = () => {
     if (!nextSyncTime) return '--:--:--';
-    
     const now = new Date();
     const diff = nextSyncTime.getTime() - now.getTime();
-    
     if (diff <= 0) return '00:00:00';
-    
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
     const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-    
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   };
 
   const handleSync = async () => {
     if (isSyncing || !window.electronAPI) return;
-    
     setIsSyncing(true);
     setSyncStatus(null);
-    
     try {
       const response = await window.electronAPI.sync.syncToCloud();
       if (response.success) {
         setSyncStatus({ type: 'success', message: response.message || 'Sync completed successfully' });
-        // Refresh next sync time
         const nextSyncResponse = await window.electronAPI.sync.getNextSyncTime();
         if (nextSyncResponse.success) {
           setNextSyncTime(new Date(nextSyncResponse.data.nextSyncTime));
@@ -259,7 +196,6 @@ const ManagerPortal = ({ user, onLogout }) => {
       setSyncStatus({ type: 'error', message: error.message || 'Sync failed' });
     } finally {
       setIsSyncing(false);
-      // Clear status after 5 seconds
       setTimeout(() => setSyncStatus(null), 5000);
     }
   };
@@ -286,28 +222,15 @@ const ManagerPortal = ({ user, onLogout }) => {
             </button>
           )}
           <div className="nav-links" ref={navLinksRef}>
-            <NavLink to="/manager/orders">
+            <NavLink to={`${STAFF_BASE}/orders`}>
               <FaShoppingCart /> <span>Orders</span>
             </NavLink>
-            <NavLink to="/manager/dine-in-orders" badgeCount={pendingBadges.dineIn}>
+            <NavLink to={`${STAFF_BASE}/dine-in-orders`} badgeCount={pendingBadges.dineIn}>
               <FaUtensils /> <span>Dine-In</span>
             </NavLink>
-            <NavLink to="/manager/delivery-orders" badgeCount={pendingBadges.delivery}>
+            <NavLink to={`${STAFF_BASE}/delivery-orders`} badgeCount={pendingBadges.delivery}>
               <FaTruck /> <span>Delivery</span>
             </NavLink>
-            <NavLink to="/manager/daily-summary">
-              <FaChartBar /> <span>Summary</span>
-            </NavLink>
-            <NavLink to="/manager/order-history">
-              <FaHistory /> <span>History</span>
-            </NavLink>
-            <NavLink to="/manager/items-sales">
-              <FaBox /> <span>Items</span>
-            </NavLink>
-            <NavLink to="/manager/customers">
-              <FaUsers /> <span>Customers</span>
-            </NavLink>
-            {/* Expenses are admin-only */}
           </div>
           {showScroll && (
             <button
@@ -322,7 +245,7 @@ const ManagerPortal = ({ user, onLogout }) => {
         </div>
         <div className="nav-right">
           {typeof window !== 'undefined' && window.electronAPI && (
-            <button 
+            <button
               className={`sync-button ${isSyncing ? 'syncing' : ''} ${syncStatus ? syncStatus.type : ''}`}
               onClick={handleSync}
               disabled={isSyncing}
@@ -341,15 +264,6 @@ const ManagerPortal = ({ user, onLogout }) => {
               )}
             </button>
           )}
-          {/* <div className="user-info">
-            <div className="user-avatar">
-              {user?.fullName?.charAt(0).toUpperCase() || 'U'}
-            </div>
-            <div className="user-details">
-              <span className="user-name">{user?.fullName || 'User'}</span>
-              <span className="user-role">{user?.role === 'manager' ? 'Manager' : 'Staff'}</span>
-            </div>
-          </div> */}
           <button className="logout-button" onClick={handleLogout}>
             <FaSignOutAlt /> <span>Logout</span>
           </button>
@@ -363,46 +277,27 @@ const ManagerPortal = ({ user, onLogout }) => {
         </div>
       </nav>
 
-      {/* Mobile Menu */}
       {mobileMenuOpen && (
         <div className="mobile-menu">
-          <NavLink to="/manager/orders" onClick={() => setMobileMenuOpen(false)}>
+          <NavLink to={`${STAFF_BASE}/orders`} onClick={() => setMobileMenuOpen(false)}>
             <FaShoppingCart /> <span>Orders</span>
           </NavLink>
-          <NavLink to="/manager/dine-in-orders" badgeCount={pendingBadges.dineIn} onClick={() => setMobileMenuOpen(false)}>
+          <NavLink to={`${STAFF_BASE}/dine-in-orders`} badgeCount={pendingBadges.dineIn} onClick={() => setMobileMenuOpen(false)}>
             <FaUtensils /> <span>Dine-In Orders</span>
           </NavLink>
-          <NavLink to="/manager/delivery-orders" badgeCount={pendingBadges.delivery} onClick={() => setMobileMenuOpen(false)}>
+          <NavLink to={`${STAFF_BASE}/delivery-orders`} badgeCount={pendingBadges.delivery} onClick={() => setMobileMenuOpen(false)}>
             <FaTruck /> <span>Delivery Orders</span>
           </NavLink>
-          <NavLink to="/manager/daily-summary" onClick={() => setMobileMenuOpen(false)}>
-            <FaChartBar /> <span>Summary</span>
-          </NavLink>
-          <NavLink to="/manager/order-history" onClick={() => setMobileMenuOpen(false)}>
-            <FaHistory /> <span>Order History</span>
-          </NavLink>
-          <NavLink to="/manager/items-sales" onClick={() => setMobileMenuOpen(false)}>
-            <FaBox /> <span>Items Sales</span>
-          </NavLink>
-          <NavLink to="/manager/customers" onClick={() => setMobileMenuOpen(false)}>
-            <FaUsers /> <span>Customers</span>
-          </NavLink>
-          {/* Expenses are admin-only */}
         </div>
       )}
 
       <main className={`main-content ${isFullScreen ? 'full-screen' : ''}`}>
         <Suspense fallback={<ScreenLoading label="Loading..." />}>
           <Routes>
-            <Route path="/" element={<OrderSystem />} />
-            <Route path="/orders" element={<OrderSystem />} />
-            <Route path="/dine-in-orders" element={<DineInOrders />} />
-            <Route path="/delivery-orders" element={<DeliveryOrders />} />
-            <Route path="/delivery-reports" element={<DeliveryReports />} />
-            <Route path="/daily-summary" element={<DailySalesSummary />} />
-            <Route path="/order-history" element={<OrderHistory />} />
-            <Route path="/items-sales" element={<ItemsSalesReport />} />
-            <Route path="/customers" element={<CustomerManagement />} />
+            <Route path="/" element={<OrderSystem basePath={STAFF_BASE} />} />
+            <Route path="/orders" element={<OrderSystem basePath={STAFF_BASE} />} />
+            <Route path="/dine-in-orders" element={<DineInOrders basePath={STAFF_BASE} />} />
+            <Route path="/delivery-orders" element={<DeliveryOrders basePath={STAFF_BASE} />} />
           </Routes>
         </Suspense>
       </main>
@@ -410,4 +305,4 @@ const ManagerPortal = ({ user, onLogout }) => {
   );
 };
 
-export default ManagerPortal;
+export default StaffPortal;

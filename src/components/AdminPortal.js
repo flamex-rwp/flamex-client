@@ -1,8 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import api from '../services/api';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { ordersAPI, expensesAPI, usersAPI, categoriesAPI, menuItemsAPI, authAPI } from '../services/api';
 import { useToast } from '../contexts/ToastContext';
+import { getPublicAssetUrl } from '../utils/publicAssetUrl';
 import ConfirmationModal from './ConfirmationModal';
 import CustomerManagement from './CustomerManagement';
+import ExpenseHistory from './ExpenseHistory';
+import ScreenLoading from './ScreenLoading';
 import './AdminPortal.css';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -14,18 +18,26 @@ import {
   FaTags,
   FaUtensils,
   FaUserFriends,
+  FaMoneyBillWave,
   FaCog,
   FaSignOutAlt,
-  FaBars
+  FaBars,
+  FaEye,
+  FaEyeSlash,
+  FaTimes
 } from 'react-icons/fa';
 
 const AdminPortal = ({ user, onLogout }) => {
   const { showSuccess, showError, showInfo } = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [screenLoading, setScreenLoading] = useState(false);
   const [users, setUsers] = useState([]);
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
+  const [fullMenuItems, setFullMenuItems] = useState([]);
   const [stats, setStats] = useState({
     totalSales: 0,
     todaySales: 0,
@@ -39,10 +51,15 @@ const AdminPortal = ({ user, onLogout }) => {
   const [chartFilter, setChartFilter] = useState('weekly'); // 'weekly', 'monthly', 'custom'
   const [chartStartDate, setChartStartDate] = useState(null);
   const [chartEndDate, setChartEndDate] = useState(null);
+  const [chartCustomApplied, setChartCustomApplied] = useState(false);
+  const [appliedChartStartDate, setAppliedChartStartDate] = useState(null);
+  const [appliedChartEndDate, setAppliedChartEndDate] = useState(null);
   const [showChartCustomRange, setShowChartCustomRange] = useState(false);
+  const logoUrl = getPublicAssetUrl('logo.png');
 
   // User Management States
   const [showUserModal, setShowUserModal] = useState(false);
+  const [showUserPassword, setShowUserPassword] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [userForm, setUserForm] = useState({
     username: '',
@@ -51,6 +68,7 @@ const AdminPortal = ({ user, onLogout }) => {
     role: 'manager',
     email: '',
     phone: '',
+    monthly_salary: '',
     status: 'active'
   });
 
@@ -58,6 +76,18 @@ const AdminPortal = ({ user, onLogout }) => {
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '' });
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+
+  const displayedCategories = (() => {
+    const q = categorySearchQuery.trim().toLowerCase();
+    if (!q) return categories;
+    return categories.filter((cat) => {
+      const id = String(cat?.id ?? '');
+      const name = String(cat?.name ?? '').toLowerCase();
+      const desc = String(cat?.description ?? '').toLowerCase();
+      return id.includes(q) || name.includes(q) || desc.includes(q);
+    });
+  })();
 
   // Menu Item Management States
   const [showMenuModal, setShowMenuModal] = useState(false);
@@ -66,6 +96,7 @@ const AdminPortal = ({ user, onLogout }) => {
     name: '',
     category_id: '',
     price: '',
+    product_price: '',
     description: '',
     image_url: '',
     available: 1
@@ -90,36 +121,104 @@ const AdminPortal = ({ user, onLogout }) => {
     return `${year}-${month}-${day}`;
   }, []);
 
+  const getChartRange = useCallback(() => {
+    const today = new Date();
+    const end = new Date(today);
+    end.setHours(23, 59, 59, 999);
+
+    if (chartFilter === 'weekly') {
+      const start = new Date(today);
+      start.setDate(today.getDate() - 6);
+      start.setHours(0, 0, 0, 0);
+      return {
+        mode: 'weekly',
+        start,
+        end,
+        startDate: getLocalDateString(start),
+        endDate: getLocalDateString(today),
+      };
+    }
+
+    if (chartFilter === 'monthly') {
+      const start = new Date(today);
+      start.setDate(today.getDate() - 29);
+      start.setHours(0, 0, 0, 0);
+      return {
+        mode: 'monthly',
+        start,
+        end,
+        startDate: getLocalDateString(start),
+        endDate: getLocalDateString(today),
+      };
+    }
+
+    if (
+      chartFilter === 'custom' &&
+      chartCustomApplied &&
+      appliedChartStartDate &&
+      appliedChartEndDate
+    ) {
+      const start = new Date(appliedChartStartDate);
+      const endCustom = new Date(appliedChartEndDate);
+      start.setHours(0, 0, 0, 0);
+      endCustom.setHours(23, 59, 59, 999);
+      return {
+        mode: 'custom',
+        start,
+        end: endCustom,
+        startDate: appliedChartStartDate,
+        endDate: appliedChartEndDate,
+      };
+    }
+
+    if (chartFilter === 'custom' && chartStartDate && chartEndDate) {
+      const start = new Date(chartStartDate);
+      const endCustom = new Date(chartEndDate);
+      start.setHours(0, 0, 0, 0);
+      endCustom.setHours(23, 59, 59, 999);
+      return {
+        mode: 'custom',
+        start,
+        end: endCustom,
+        startDate: chartStartDate,
+        endDate: chartEndDate,
+      };
+    }
+
+    const start = new Date(today);
+    start.setDate(today.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+    return {
+      mode: 'weekly',
+      start,
+      end,
+      startDate: getLocalDateString(start),
+      endDate: getLocalDateString(today),
+    };
+  }, [
+    appliedChartEndDate,
+    appliedChartStartDate,
+    chartCustomApplied,
+    chartEndDate,
+    chartFilter,
+    chartStartDate,
+    getLocalDateString,
+  ]);
+
   const fetchDashboardStats = useCallback(async () => {
     try {
-      // Build date range params based on chart filter
-      const params = {};
-      if (chartFilter === 'weekly') {
-        const today = new Date();
-        const weekStart = new Date(today);
-        weekStart.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
-        weekStart.setHours(0, 0, 0, 0);
-        params.startDate = getLocalDateString(weekStart);
-        params.endDate = getLocalDateString(today);
-      } else if (chartFilter === 'monthly') {
-        const today = new Date();
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        params.startDate = getLocalDateString(monthStart);
-        params.endDate = getLocalDateString(today);
-      } else if (chartFilter === 'custom' && chartStartDate && chartEndDate) {
-        params.startDate = chartStartDate;
-        params.endDate = chartEndDate;
-      }
+      const range = getChartRange();
+      const params = range?.startDate && range?.endDate ? { startDate: range.startDate, endDate: range.endDate } : {};
 
       const [ordersRes, expensesRes] = await Promise.all([
-        api.get('/api/orders', { params: { ...params, limit: 10000 } }),
-        api.get('/api/expenses', { params: { ...params, limit: 10000 } })
+        ordersAPI.getAll({ ...params, limit: 10000 }),
+        expensesAPI.getAll({ ...params, limit: 10000 })
       ]);
 
-      // Extract data from paginated response structure
-      // Response format: { success: true, message: '...', data: { orders: [...], total: X, page: Y } }
-      const ordersData = ordersRes.data.data;
-      const expensesData = expensesRes.data.data;
+      // Extract data from IPC response structure
+      // IPC response format: { data: [...] } or { data: { success: true, data: [...] } }
+      const ordersData = ordersRes.data?.data || ordersRes.data || [];
+      const expensesData = expensesRes.data?.data || expensesRes.data || [];
 
       // Handle both paginated and direct array responses
       const orders = Array.isArray(ordersData) ? ordersData : (ordersData?.orders || ordersData?.data || []);
@@ -161,35 +260,89 @@ const AdminPortal = ({ user, onLogout }) => {
         todayExpenses: 0
       });
     }
-  }, [getLocalDateString, chartFilter, chartStartDate, chartEndDate]);
+  }, [getChartRange, getLocalDateString]);
 
+  const [searchQuery, setSearchQuery] = useState('');
+  
   useEffect(() => {
-    fetchDashboardStats();
-    if (activeTab === 'users') fetchUsers();
-    if (activeTab === 'categories') fetchCategories();
-    if (activeTab === 'menu') {
-      fetchCategories();
-      fetchMenuItems();
+    const q = searchQuery.trim().toLowerCase();
+
+    // If no search query, show all menu items
+    if (!q) {
+      setMenuItems(fullMenuItems);
+      return;
     }
+
+    const filteredItems = fullMenuItems.filter((item) => {
+      const id = String(item?.id ?? '');
+      const name = String(item?.name ?? '').toLowerCase();
+      const categoryName = String(item?.category?.name || item?.category_name || '').toLowerCase();
+
+      return (
+        id.includes(q) ||
+        name.includes(q) ||
+        categoryName.includes(q)
+      );
+    });
+
+    // Always keep displayed items in descending order by ID
+    const sortedFiltered = [...filteredItems].sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0));
+    setMenuItems(sortedFiltered);
+  }, [searchQuery, fullMenuItems]);
+
+
+  
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setScreenLoading(true);
+      try {
+        await fetchDashboardStats();
+        if (activeTab === 'users') await fetchUsers();
+        if (activeTab === 'categories') await fetchCategories();
+        if (activeTab === 'menu') {
+          await fetchCategories();
+          await fetchMenuItems();
+        }
+      } finally {
+        if (!cancelled) setScreenLoading(false);
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, fetchDashboardStats]);
 
   const fetchUsers = async () => {
     try {
-      const response = await api.get('/api/users');
-      setUsers(response.data.data || []);
+      const response = await usersAPI.getAll();
+      // IPC/axios responses can be either an array or an object wrapper like:
+      // { success: true, data: [...] } or { users: [...] }
+      const usersData = response?.data?.data ?? response?.data ?? [];
+      const normalizedUsers = Array.isArray(usersData)
+        ? usersData
+        : (usersData?.users || usersData?.data || []);
+      setUsers(Array.isArray(normalizedUsers) ? normalizedUsers : []);
     } catch (err) {
       console.error('Error fetching users:', err);
       setUsers([]);
-      // Use formatted message from api interceptor
-      showError('Error fetching users: ' + (err.formattedMessage || err.response?.data?.error || err.message));
+      showError('Error fetching users: ' + (err.formattedMessage || err.response?.data?.error || err.message || 'Unknown error'));
     }
   };
 
   const fetchCategories = async () => {
     try {
-      const response = await api.get('/api/categories');
-      setCategories(response.data.data || []);
+      const response = await categoriesAPI.getAll();
+      // API may return wrapper: { success: true, data: [...] }
+      // Also, if the browser returns 304 Not Modified, axios may give an empty body.
+      const raw = response?.data?.data ?? response?.data ?? [];
+      const list = Array.isArray(raw) ? raw : (raw?.categories || raw?.data || []);
+      const normalized = Array.isArray(list) ? list : [];
+      // sort data in descending order based on id
+      const sortedData = [...normalized].sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0));
+      setCategories(sortedData);
     } catch (err) {
       console.error('Error fetching categories:', err);
       setCategories([]);
@@ -198,14 +351,20 @@ const AdminPortal = ({ user, onLogout }) => {
 
   const fetchMenuItems = async () => {
     try {
-      const response = await api.get('/api/menu-items');
-      const items = response.data.data || [];
+      const response = await menuItemsAPI.getAll();
+      // API may return wrapper: { success: true, data: [...] }
+      // Also, if the browser returns 304 Not Modified, axios may give an empty body.
+      const raw = response?.data?.data ?? response?.data ?? [];
+      const items = Array.isArray(raw) ? raw : (raw?.menuItems || raw?.items || raw?.data || []);
       // Normalize availability field (ensure it's 0 or 1)
-      const normalizedItems = items.map(item => ({
+      const normalizedItems = (Array.isArray(items) ? items : []).map(item => ({
         ...item,
         available: item.available === 1 || item.available === true ? 1 : 0
       }));
-      setMenuItems(normalizedItems);
+      // Always keep menu items in descending order by ID (newest/highest ID on top)
+      const sortedItems = [...normalizedItems].sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0));
+      setMenuItems(sortedItems);
+      setFullMenuItems(sortedItems);
     } catch (err) {
       console.error('Error fetching menu items:', err);
       setMenuItems([]);
@@ -219,11 +378,13 @@ const AdminPortal = ({ user, onLogout }) => {
       // Transform payload to match backend schema (camelCase)
       const payload = {
         username: userForm.username,
-        fullName: userForm.full_name,
+        // If full name is not provided, fall back to username
+        fullName: userForm.full_name || userForm.username,
         role: userForm.role,
         email: userForm.email || '',
         phone: userForm.phone || '',
-        status: userForm.status
+        status: userForm.status,
+        monthlySalary: userForm.monthly_salary === '' ? null : parseFloat(userForm.monthly_salary)
       };
 
       // Only include password if it's provided
@@ -232,15 +393,16 @@ const AdminPortal = ({ user, onLogout }) => {
       }
 
       if (editingUser) {
-        await api.put(`/api/users/${editingUser.id}`, payload);
+        await usersAPI.update(editingUser.id, payload);
         showSuccess('User updated successfully');
       } else {
-        await api.post('/api/users', payload);
+        await usersAPI.create(payload);
         showSuccess('User created successfully');
       }
       setShowUserModal(false);
+      setShowUserPassword(false);
       setEditingUser(null);
-      setUserForm({ username: '', password: '', full_name: '', role: 'manager', email: '', phone: '', status: 'active' });
+      setUserForm({ username: '', password: '', full_name: '', role: 'manager', email: '', phone: '', monthly_salary: '', status: 'active' });
       fetchUsers();
     } catch (err) {
       showError(err.formattedMessage || err.response?.data?.error || err.message || 'Operation failed');
@@ -254,7 +416,7 @@ const AdminPortal = ({ user, onLogout }) => {
       message: 'Are you sure you want to delete this user?',
       onConfirm: async () => {
         try {
-          await api.delete(`/api/users/${id}`);
+          await usersAPI.delete(id);
           showSuccess('User deleted successfully');
           fetchUsers();
         } catch (err) {
@@ -266,14 +428,17 @@ const AdminPortal = ({ user, onLogout }) => {
   };
 
   const openEditUser = (user) => {
+    setShowUserPassword(false);
     setEditingUser(user);
     setUserForm({
       username: user.username,
       password: '',
-      full_name: user.fullName || user.full_name,
+      // Preserve existing full name if present, otherwise fall back to username
+      full_name: user.fullName || user.full_name || user.username,
       role: user.role,
       email: user.email || '',
       phone: user.phone || '',
+      monthly_salary: (user.monthlySalary ?? user.monthly_salary ?? '') === null ? '' : String(user.monthlySalary ?? user.monthly_salary ?? ''),
       status: user.status
     });
     setShowUserModal(true);
@@ -284,10 +449,10 @@ const AdminPortal = ({ user, onLogout }) => {
     e.preventDefault();
     try {
       if (editingCategory) {
-        await api.put(`/api/categories/${editingCategory.id}`, categoryForm);
+        await categoriesAPI.update(editingCategory.id, categoryForm);
         showSuccess('Category updated successfully');
       } else {
-        await api.post('/api/categories', categoryForm);
+        await categoriesAPI.create(categoryForm);
         showSuccess('Category created successfully');
       }
       setShowCategoryModal(false);
@@ -306,7 +471,7 @@ const AdminPortal = ({ user, onLogout }) => {
       message: 'Are you sure you want to delete this category?',
       onConfirm: async () => {
         try {
-          await api.delete(`/api/categories/${id}`);
+          await categoriesAPI.delete(id);
           showSuccess('Category deleted successfully');
           fetchCategories();
         } catch (err) {
@@ -345,26 +510,38 @@ const AdminPortal = ({ user, onLogout }) => {
         }
       }
 
+      const productPriceRaw = String(menuForm.product_price ?? '').trim();
+      let productPrice = null;
+      if (productPriceRaw !== '') {
+        const parsed = parseInt(productPriceRaw, 10);
+        if (Number.isNaN(parsed)) {
+          showError('Product price must be a whole number (or leave empty).');
+          return;
+        }
+        productPrice = parsed;
+      }
+
       // Transform field names to match backend schema (camelCase)
       const payload = {
         name: menuForm.name,
         categoryId: menuForm.category_id && menuForm.category_id !== '' ? parseInt(menuForm.category_id) : null,
         price: parseFloat(menuForm.price),
+        productPrice,
         description: menuForm.description || '',
         imageUrl: menuForm.image_url || '',
         available: menuForm.available === 1 || menuForm.available === true
       };
 
       if (editingMenuItem) {
-        await api.put(`/api/menu-items/${editingMenuItem.id}`, payload);
+        await menuItemsAPI.update(editingMenuItem.id, payload);
         showSuccess('Menu item updated successfully');
       } else {
-        await api.post('/api/menu-items', payload);
+        await menuItemsAPI.create(payload);
         showSuccess('Menu item created successfully');
       }
       setShowMenuModal(false);
       setEditingMenuItem(null);
-      setMenuForm({ name: '', category_id: '', price: '', description: '', image_url: '', available: 1 });
+      setMenuForm({ name: '', category_id: '', price: '', product_price: '', description: '', image_url: '', available: 1 });
       setImageUrlError('');
       fetchMenuItems();
     } catch (err) {
@@ -419,7 +596,7 @@ const AdminPortal = ({ user, onLogout }) => {
       message: 'Are you sure you want to delete this menu item?',
       onConfirm: async () => {
         try {
-          await api.delete(`/api/menu-items/${id}`);
+          await menuItemsAPI.delete(id);
           showSuccess('Menu item deleted successfully');
           fetchMenuItems();
         } catch (err) {
@@ -432,7 +609,7 @@ const AdminPortal = ({ user, onLogout }) => {
 
   const handleLogout = async () => {
     try {
-      await api.post('/api/auth/logout', {});
+      await authAPI.logout();
       onLogout();
     } catch (err) {
       console.error('Logout error:', err);
@@ -445,38 +622,14 @@ const AdminPortal = ({ user, onLogout }) => {
   // Chart Data Processing
   const getSalesTrendData = () => {
     let dateRange = [];
-    const today = new Date();
-
-    if (chartFilter === 'weekly') {
-      // Last 7 days
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        dateRange.push(getLocalDateString(d));
-      }
-    } else if (chartFilter === 'monthly') {
-      // Last 30 days
-      for (let i = 29; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        dateRange.push(getLocalDateString(d));
-      }
-    } else if (chartFilter === 'custom' && chartStartDate && chartEndDate) {
-      // Custom range
-      const start = new Date(chartStartDate);
-      const end = new Date(chartEndDate);
-      const current = new Date(start);
-      while (current <= end) {
-        dateRange.push(getLocalDateString(current));
-        current.setDate(current.getDate() + 1);
-      }
-    } else {
-      // Default to last 7 days
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        dateRange.push(getLocalDateString(d));
-      }
+    const range = getChartRange();
+    const current = new Date(range.start);
+    current.setHours(0, 0, 0, 0);
+    const end = new Date(range.end);
+    end.setHours(0, 0, 0, 0);
+    while (current <= end) {
+      dateRange.push(getLocalDateString(current));
+      current.setDate(current.getDate() + 1);
     }
 
     return dateRange.map(date => {
@@ -487,9 +640,11 @@ const AdminPortal = ({ user, onLogout }) => {
       const dayExpenses = dayExpensesList.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0);
 
       const dateObj = new Date(date);
-      const label = chartFilter === 'monthly'
+      const label = chartFilter === 'weekly'
+        ? dateObj.toLocaleDateString('en-US', { weekday: 'short' })
+        : chartFilter === 'monthly'
         ? dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        : dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+        : dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
       return {
         name: label,
@@ -501,18 +656,15 @@ const AdminPortal = ({ user, onLogout }) => {
 
   const getTopItemsData = () => {
     const itemMap = {};
-    const today = new Date();
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(today.getDate() - 7);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    const range = getChartRange();
 
-    // Filter orders from last 7 days only
-    const recentOrdersLast7Days = recentOrders.filter(order => {
+    // Filter orders within selected range
+    const filteredOrders = recentOrders.filter(order => {
       const orderDate = new Date(order.createdAt || order.created_at);
-      return orderDate >= sevenDaysAgo;
+      return Number.isFinite(orderDate.getTime()) && orderDate >= range.start && orderDate <= range.end;
     });
 
-    recentOrdersLast7Days.forEach(order => {
+    filteredOrders.forEach(order => {
       const items = order.orderItems || order.order_items || [];
       if (Array.isArray(items)) {
         items.forEach(item => {
@@ -535,10 +687,139 @@ const AdminPortal = ({ user, onLogout }) => {
   const salesTrendData = getSalesTrendData();
   const topItemsData = getTopItemsData();
 
+  const isOrderCancelled = useCallback((order) => {
+    const orderStatus = String(order?.orderStatus ?? order?.order_status ?? '').trim().toLowerCase();
+    const paymentStatus = String(order?.paymentStatus ?? order?.payment_status ?? '').trim().toLowerCase();
+    const status = String(order?.status ?? '').trim().toLowerCase();
+    return orderStatus === 'cancelled' || paymentStatus === 'cancelled' || status === 'cancelled';
+  }, []);
+
+  const getReport = useCallback(() => {
+    const range = getChartRange();
+    const from = range.start;
+    const to = range.end;
+
+    const inRange = (recentOrders || [])
+      .filter((o) => {
+        const d = new Date(o.createdAt || o.created_at);
+        return Number.isFinite(d.getTime()) && d >= from && d <= to;
+      })
+      .filter((o) => !isOrderCancelled(o));
+
+    const hourly = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      name: `${String(h).padStart(2, '0')}:00`,
+      Sales: 0,
+      Orders: 0,
+    }));
+
+    const typeAgg = {
+      dine_in: { key: 'dine_in', label: 'Dine-in', sales: 0, orders: 0 },
+      delivery: { key: 'delivery', label: 'Delivery', sales: 0, orders: 0 },
+      takeaway: { key: 'takeaway', label: 'Takeaway', sales: 0, orders: 0 },
+    };
+
+    for (const o of inRange) {
+      const created = new Date(o.createdAt || o.created_at);
+      const hr = created.getHours();
+      const amt = parseFloat(o.totalAmount || o.total_amount || 0) || 0;
+
+      if (hourly[hr]) {
+        hourly[hr].Sales += amt;
+        hourly[hr].Orders += 1;
+      }
+
+      const rawType = String(o.orderType || o.order_type || '').trim().toLowerCase();
+      const table = String(o.tableNumber || o.table_number || '').trim();
+      const normalizedType = rawType === 'delivery' ? 'delivery' : 'dine_in';
+      const isTakeaway = normalizedType === 'dine_in' && !table;
+      const bucket = isTakeaway ? 'takeaway' : normalizedType;
+
+      typeAgg[bucket].sales += amt;
+      typeAgg[bucket].orders += 1;
+    }
+
+    const peakBySales = hourly.reduce(
+      (best, cur) => (cur.Sales > best.Sales ? cur : best),
+      hourly[0]
+    );
+    const peakByOrders = hourly.reduce(
+      (best, cur) => (cur.Orders > best.Orders ? cur : best),
+      hourly[0]
+    );
+
+    const typeSplit = Object.values(typeAgg)
+      .filter((t) => t.orders > 0)
+      .map((t) => ({
+        name: t.label,
+        sales: t.sales,
+        orders: t.orders,
+      }))
+      .sort((a, b) => b.sales - a.sales);
+
+    const totalSales = inRange.reduce((sum, o) => sum + (parseFloat(o.totalAmount || o.total_amount || 0) || 0), 0);
+    const totalOrders = inRange.length;
+
+    const takeaways = typeAgg.takeaway.orders;
+    const delivery = typeAgg.delivery.orders;
+    const dineIn = typeAgg.dine_in.orders;
+
+    const insights = [];
+    if (totalOrders > 0) {
+      if (peakBySales.Sales > 0) insights.push(`Peak sales hour: ${peakBySales.name}`);
+      if (peakByOrders.Orders > 0) insights.push(`Busiest hour: ${peakByOrders.name}`);
+      if (delivery > 0) insights.push(`Delivery share: ${Math.round((delivery / totalOrders) * 100)}%`);
+      if (takeaways > 0) insights.push(`Takeaway share: ${Math.round((takeaways / totalOrders) * 100)}%`);
+      if (dineIn > 0) insights.push(`Dine-in share: ${Math.round((dineIn / totalOrders) * 100)}%`);
+    }
+
+    return {
+      from,
+      to,
+      orders: inRange,
+      totalSales,
+      totalOrders,
+      hourly,
+      peakBySales,
+      peakByOrders,
+      typeSplit,
+      insights,
+    };
+  }, [getChartRange, recentOrders, isOrderCancelled]);
+
+  const report = getReport();
+
+  const chartCustomDraftComplete = Boolean(chartStartDate && chartEndDate);
+  const chartCustomDirty =
+    chartCustomApplied &&
+    chartCustomDraftComplete &&
+    (chartStartDate !== appliedChartStartDate || chartEndDate !== appliedChartEndDate);
+
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     setIsSidebarOpen(false);
+    const path = tab === 'dashboard' ? '/admin/dashboard' : `/admin/${tab}`;
+    if (location.pathname !== path) {
+      navigate(path, { replace: false });
+    }
   };
+
+  const routeTab = useMemo(() => {
+    const p = (location.pathname || '').replace(/\/+$/, '');
+    const seg = p.startsWith('/admin') ? p.split('/')[2] : null;
+    if (!seg || seg === '') return 'dashboard';
+    // Only allow known tabs
+    const allowed = new Set(['dashboard', 'users', 'categories', 'menu', 'customers', 'expenses', 'settings']);
+    return allowed.has(seg) ? seg : 'dashboard';
+  }, [location.pathname]);
+
+  // Keep state in sync when user uses back/forward or lands on a deep link.
+  useEffect(() => {
+    if (activeTab !== routeTab) {
+      setActiveTab(routeTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeTab]);
 
   const toggleSidebar = () => setIsSidebarOpen((prev) => !prev);
   const closeSidebar = () => setIsSidebarOpen(false);
@@ -548,7 +829,7 @@ const AdminPortal = ({ user, onLogout }) => {
       {/* Mobile Header - Only visible on small screens */}
       <div className="admin-mobile-header">
         <div className="admin-mobile-logo">
-          <img src="/logo.png" alt="Flamex" className="admin-logo-mobile" />
+          <img src={logoUrl} alt="Flamex" className="admin-logo-mobile" />
           <span className="admin-mobile-title">Admin Portal</span>
         </div>
         <button
@@ -564,7 +845,7 @@ const AdminPortal = ({ user, onLogout }) => {
 
       <div className={`admin-sidebar ${isSidebarOpen ? 'open' : ''}`}>
         <div className="admin-header">
-          <img src="/logo.png" alt="Flamex" className="admin-logo" />
+          <img src={logoUrl} alt="Flamex" className="admin-logo" />
           <h2>Admin Portal</h2>
           <p className="user-info">{user.fullName}</p>
         </div>
@@ -601,6 +882,12 @@ const AdminPortal = ({ user, onLogout }) => {
             <FaUserFriends /> <span>Customers</span>
           </button>
           <button
+            className={activeTab === 'expenses' ? 'active' : ''}
+            onClick={() => handleTabChange('expenses')}
+          >
+            <FaMoneyBillWave /> <span>Expenses</span>
+          </button>
+          <button
             className={activeTab === 'settings' ? 'active' : ''}
             onClick={() => handleTabChange('settings')}
           >
@@ -614,47 +901,54 @@ const AdminPortal = ({ user, onLogout }) => {
       </div>
 
       <div className="admin-content">
-        {activeTab === 'dashboard' && (
-          <div className="dashboard-tab">
-            <h1>Dashboard Overview</h1>
-            <div className="stats-grid">
-              <div className="stat-card">
-                <h3>Today's Sales</h3>
-                <p className="stat-value">PKR {stats.todaySales.toFixed(2)}</p>
-                <span className="stat-label">{stats.todayOrders} orders</span>
-              </div>
-              <div className="stat-card">
-                <h3>Total Sales</h3>
-                <p className="stat-value">PKR {stats.totalSales.toFixed(2)}</p>
-                <span className="stat-label">{stats.totalOrders} orders</span>
-              </div>
-              <div className="stat-card">
-                <h3>Today's Expenses</h3>
-                <p className="stat-value">PKR {stats.todayExpenses.toFixed(2)}</p>
-              </div>
-              <div className="stat-card">
-                <h3>Total Expenses</h3>
-                <p className="stat-value">PKR {stats.totalExpenses.toFixed(2)}</p>
-              </div>
-            </div>
+        {screenLoading ? (
+          <ScreenLoading label="Loading..." />
+        ) : (
+          <>
+            {activeTab === 'dashboard' && (
+              <div className="dashboard-tab">
+                <h1>Dashboard Overview</h1>
+                <div className="stats-grid">
+                  <div className="stat-card">
+                    <h3>Today's Sales</h3>
+                    <p className="stat-value">PKR {stats.todaySales.toFixed(2)}</p>
+                    <span className="stat-label">{stats.todayOrders} orders</span>
+                  </div>
+                  <div className="stat-card">
+                    <h3>Total Sales</h3>
+                    <p className="stat-value">PKR {stats.totalSales.toFixed(2)}</p>
+                    <span className="stat-label">{stats.totalOrders} orders</span>
+                  </div>
+                  <div className="stat-card">
+                    <h3>Today's Expenses</h3>
+                    <p className="stat-value">PKR {stats.todayExpenses.toFixed(2)}</p>
+                  </div>
+                  <div className="stat-card">
+                    <h3>Total Expenses</h3>
+                    <p className="stat-value">PKR {stats.totalExpenses.toFixed(2)}</p>
+                  </div>
+                </div>
 
-            {/* Chart Filters */}
-            <div style={{
-              background: 'white',
-              padding: '1rem',
-              borderRadius: '12px',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-              marginBottom: '1.5rem'
-            }}>
-              <div style={{ marginBottom: '0.75rem', fontWeight: '600', color: '#495057' }}>
-                Filter Charts
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                <button
-                  onClick={() => {
-                    setChartFilter('weekly');
-                    setChartStartDate(null);
+                {/* Chart Filters */}
+                <div style={{
+                  background: 'white',
+                  padding: '1rem',
+                  borderRadius: '12px',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                  marginBottom: '1.5rem'
+                }}>
+                  <div style={{ marginBottom: '0.75rem', fontWeight: '600', color: '#495057' }}>
+                    Filter Charts
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button
+                      onClick={() => {
+                        setChartFilter('weekly');
+                        setChartStartDate(null);
                     setChartEndDate(null);
+                    setChartCustomApplied(false);
+                    setAppliedChartStartDate(null);
+                    setAppliedChartEndDate(null);
                     setShowChartCustomRange(false);
                   }}
                   style={{
@@ -675,6 +969,9 @@ const AdminPortal = ({ user, onLogout }) => {
                     setChartFilter('monthly');
                     setChartStartDate(null);
                     setChartEndDate(null);
+                    setChartCustomApplied(false);
+                    setAppliedChartStartDate(null);
+                    setAppliedChartEndDate(null);
                     setShowChartCustomRange(false);
                   }}
                   style={{
@@ -692,10 +989,8 @@ const AdminPortal = ({ user, onLogout }) => {
                 </button>
                 <button
                   onClick={() => {
-                    setShowChartCustomRange(!showChartCustomRange);
-                    if (!showChartCustomRange) {
-                      setChartFilter('custom');
-                    }
+                    setChartFilter('custom');
+                    setShowChartCustomRange(true);
                   }}
                   style={{
                     padding: '0.5rem 1rem',
@@ -715,8 +1010,9 @@ const AdminPortal = ({ user, onLogout }) => {
                     <input
                       type="date"
                       value={chartStartDate || ''}
-                      onChange={(e) => setChartStartDate(e.target.value)}
+                      onChange={(e) => setChartStartDate(e.target.value || null)}
                       max={chartEndDate || new Date().toISOString().split('T')[0]}
+                      placeholder="mm/dd/yyyy"
                       style={{
                         padding: '0.5rem',
                         border: '2px solid #dee2e6',
@@ -728,9 +1024,10 @@ const AdminPortal = ({ user, onLogout }) => {
                     <input
                       type="date"
                       value={chartEndDate || ''}
-                      onChange={(e) => setChartEndDate(e.target.value)}
-                      min={chartStartDate}
+                      onChange={(e) => setChartEndDate(e.target.value || null)}
+                      min={chartStartDate || undefined}
                       max={new Date().toISOString().split('T')[0]}
+                      placeholder="mm/dd/yyyy"
                       style={{
                         padding: '0.5rem',
                         border: '2px solid #dee2e6',
@@ -738,31 +1035,141 @@ const AdminPortal = ({ user, onLogout }) => {
                         fontSize: '0.9rem'
                       }}
                     />
-                    <button
-                      onClick={() => {
-                        if (chartStartDate && chartEndDate) {
+                    {(!chartCustomApplied || chartCustomDirty) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (chartStartDate && chartEndDate) {
+                            setAppliedChartStartDate(chartStartDate);
+                            setAppliedChartEndDate(chartEndDate);
+                            setChartCustomApplied(true);
+                            fetchDashboardStats();
+                          }
+                        }}
+                        disabled={!chartStartDate || !chartEndDate}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          border: 'none',
+                          borderRadius: '6px',
+                          background: 'var(--gradient-primary)',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          cursor: (!chartStartDate || !chartEndDate) ? 'not-allowed' : 'pointer',
+                          fontSize: '0.9rem',
+                          opacity: (!chartStartDate || !chartEndDate) ? 0.5 : 1
+                        }}
+                      >
+                        Apply
+                      </button>
+                    )}
+                    {chartCustomApplied && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChartStartDate(null);
+                          setChartEndDate(null);
+                          setChartCustomApplied(false);
+                          setAppliedChartStartDate(null);
+                          setAppliedChartEndDate(null);
                           fetchDashboardStats();
-                        }
-                      }}
-                      disabled={!chartStartDate || !chartEndDate}
-                      style={{
-                        padding: '0.5rem 1rem',
-                        border: 'none',
-                        borderRadius: '6px',
-                        background: 'var(--gradient-primary)',
-                        color: 'white',
-                        fontWeight: 'bold',
-                        cursor: (!chartStartDate || !chartEndDate) ? 'not-allowed' : 'pointer',
-                        fontSize: '0.9rem',
-                        opacity: (!chartStartDate || !chartEndDate) ? 0.5 : 1
-                      }}
-                    >
-                      Apply
-                    </button>
+                        }}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          border: 'none',
+                          borderRadius: '6px',
+                          background: 'var(--gradient-primary)',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          fontSize: '0.9rem'
+                        }}
+                      >
+                        Remove filter
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
             </div>
+
+            {user?.role === 'admin' && (
+              <div className="weekly-report">
+                <div className="weekly-report-header">
+                  <div>
+                    <h2>Report</h2>
+                    <div className="weekly-report-subtitle">
+                      {chartFilter === 'weekly'
+                        ? 'Last 7 days (including today)'
+                        : chartFilter === 'monthly'
+                        ? 'Last 30 days (including today)'
+                        : '(Custom Range)'}
+                    </div>
+                  </div>
+                  <div className="weekly-report-kpis">
+                    <div className="weekly-kpi">
+                      <div className="weekly-kpi-label">Sales</div>
+                      <div className="weekly-kpi-value">PKR {report.totalSales.toFixed(2)}</div>
+                    </div>
+                    <div className="weekly-kpi">
+                      <div className="weekly-kpi-label">Orders</div>
+                      <div className="weekly-kpi-value">{report.totalOrders}</div>
+                    </div>
+                    <div className="weekly-kpi">
+                      <div className="weekly-kpi-label">Peak hour (sales)</div>
+                      <div className="weekly-kpi-value">{report.peakBySales?.name || '—'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="weekly-report-grid">
+                  <div className="chart-container">
+                    <h3>Hourly Sales</h3>
+                    <div className="chart-wrapper">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={report.hourly} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="name" interval={2} axisLine={false} tickLine={false} />
+                          <YAxis axisLine={false} tickLine={false} />
+                          <Tooltip />
+                          <Bar dataKey="Sales" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="chart-container">
+                    <h3>Order Type Split</h3>
+                    <div className="weekly-split">
+                      {report.typeSplit.length === 0 ? (
+                        <div className="weekly-empty">No orders in this range.</div>
+                      ) : (
+                        <div className="weekly-split-list">
+                          {report.typeSplit.map((t) => (
+                            <div key={t.name} className="weekly-split-row">
+                              <div className="weekly-split-name">{t.name}</div>
+                              <div className="weekly-split-meta">
+                                <span className="weekly-split-orders">{t.orders} orders</span>
+                                <span className="weekly-split-sales">PKR {t.sales.toFixed(2)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {report.insights.length > 0 && (
+                        <div className="weekly-insights">
+                          <div className="weekly-insights-title">Takeaways</div>
+                          <ul className="weekly-insights-list">
+                            {report.insights.slice(0, 4).map((txt) => (
+                              <li key={txt}>{txt}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="charts-row">
               <div className="chart-container">
@@ -792,7 +1199,7 @@ const AdminPortal = ({ user, onLogout }) => {
               </div>
 
               <div className="chart-container">
-                <h3>Top Selling Items (Last 7 Days)</h3>
+                <h3>Top Selling Items {chartFilter === 'weekly' ? '(Last 7 Days)' : chartFilter === 'monthly' ? '(Last 30 Days)' : '(Custom Range)'}</h3>
                 <div className="chart-wrapper">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={topItemsData} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
@@ -821,7 +1228,7 @@ const AdminPortal = ({ user, onLogout }) => {
                 className="btn-primary"
                 onClick={() => {
                   setEditingUser(null);
-                  setUserForm({ username: '', password: '', full_name: '', role: 'manager', email: '', phone: '', status: 'active' });
+                  setUserForm({ username: '', password: '', full_name: '', role: 'manager', email: '', phone: '', monthly_salary: '', status: 'active' });
                   setShowUserModal(true);
                 }}
               >
@@ -838,18 +1245,36 @@ const AdminPortal = ({ user, onLogout }) => {
                     <th>Full Name</th>
                     <th>Role</th>
                     <th>Email</th>
+                    <th>Monthly salary</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map(user => (
+                  {(Array.isArray(users) ? users : []).map(user => (
                     <tr key={user.id}>
                       <td>{user.id}</td>
-                      <td>{user.username}</td>
-                      <td>{user.full_name}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 180 }} title={user.username}>
+                          {user.username}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className="cell-truncate"
+                          style={{ maxWidth: 220 }}
+                          title={user.fullName || user.full_name || user.username}
+                        >
+                          {user.fullName || user.full_name || user.username}
+                        </span>
+                      </td>
                       <td><span className={`role-badge ${user.role}`}>{user.role}</span></td>
-                      <td>{user.email}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 240 }} title={user.email || ''}>
+                          {user.email}
+                        </span>
+                      </td>
+                      <td>{(user.monthlySalary ?? user.monthly_salary) ? `PKR ${Number(user.monthlySalary ?? user.monthly_salary).toLocaleString()}` : '—'}</td>
                       <td><span className={`status-badge ${user.status}`}>{user.status}</span></td>
                       <td>
                         <button className="btn-edit" onClick={() => openEditUser(user)}>Edit</button>
@@ -879,6 +1304,75 @@ const AdminPortal = ({ user, onLogout }) => {
               </button>
             </div>
 
+            {/* Search */}
+            <div style={{
+              background: 'white',
+              padding: '1.5rem',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              marginBottom: '1.5rem'
+            }}>
+              <div style={{ marginBottom: '0.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#495057' }}>
+                  Search Categories
+                </label>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div
+                    style={{
+                      position: 'relative',
+                      flex: '1',
+                      minWidth: '250px'
+                    }}
+                  >
+                    <input
+                      type="text"
+                      placeholder="Search by ID, name, or description"
+                      value={categorySearchQuery}
+                      onChange={(e) => setCategorySearchQuery(e.target.value)}
+                      style={{
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        padding: '0.75rem',
+                        paddingRight: categorySearchQuery.trim() ? '2.5rem' : '0.75rem',
+                        border: '2px solid #dee2e6',
+                        borderRadius: '8px',
+                        fontSize: '0.95rem'
+                      }}
+                    />
+                    {categorySearchQuery.trim() !== '' && (
+                      <button
+                        type="button"
+                        aria-label="Clear search"
+                        onClick={() => setCategorySearchQuery('')}
+                        style={{
+                          position: 'absolute',
+                          right: '6px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: '32px',
+                          height: '32px',
+                          padding: 0,
+                          border: 'none',
+                          borderRadius: '6px',
+                          background: 'transparent',
+                          color: '#6c757d',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <FaTimes size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#6c757d' }}>
+                    Showing {displayedCategories.length} of {categories.length}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -890,21 +1384,37 @@ const AdminPortal = ({ user, onLogout }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {categories.map(cat => (
-                    <tr key={cat.id}>
-                      <td>{cat.id}</td>
-                      <td>{cat.name}</td>
-                      <td>{cat.description}</td>
-                      <td>
-                        <button className="btn-edit" onClick={() => {
-                          setEditingCategory(cat);
-                          setCategoryForm({ name: cat.name, description: cat.description });
-                          setShowCategoryModal(true);
-                        }}>Edit</button>
-                        <button className="btn-delete" onClick={() => handleDeleteCategory(cat.id)}>Delete</button>
+                  {displayedCategories.length > 0 ? (
+                    displayedCategories.map(cat => (
+                      <tr key={cat.id}>
+                        <td>{cat.id}</td>
+                        <td>
+                          <span className="cell-truncate" style={{ maxWidth: 240 }} title={cat.name || ''}>
+                            {cat.name}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="cell-truncate" style={{ maxWidth: 360 }} title={cat.description || ''}>
+                            {cat.description}
+                          </span>
+                        </td>
+                        <td>
+                          <button className="btn-edit" onClick={() => {
+                            setEditingCategory(cat);
+                            setCategoryForm({ name: cat.name, description: cat.description });
+                            setShowCategoryModal(true);
+                          }}>Edit</button>
+                          <button className="btn-delete" onClick={() => handleDeleteCategory(cat.id)}>Delete</button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={4} style={{ textAlign: 'center', color: '#6c757d', padding: '1rem' }}>
+                        No categories match your search.
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>
@@ -919,7 +1429,7 @@ const AdminPortal = ({ user, onLogout }) => {
                 className="btn-primary"
                 onClick={() => {
                   setEditingMenuItem(null);
-                  setMenuForm({ name: '', category_id: '', price: '', description: '', image_url: '', available: 1 });
+                  setMenuForm({ name: '', category_id: '', price: '', product_price: '', description: '', image_url: '', available: 1 });
                   setImageUrlError('');
                   setShowMenuModal(true);
                 }}
@@ -927,7 +1437,42 @@ const AdminPortal = ({ user, onLogout }) => {
                 Add New Menu Item
               </button>
             </div>
+            
 
+  
+    {/* Search Filters */}
+          <div style={{
+            background: 'white',
+            padding: '1.5rem',
+            borderRadius: '12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            marginBottom: '1.5rem'
+          }}>
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#495057' }}>
+                Search Menu Items
+              </label>
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  placeholder="Search by ID, Name or Category"
+                  value={searchQuery} 
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{
+                    flex: '1',
+                    minWidth: '250px',
+                    padding: '0.75rem',
+                    border: '2px solid #dee2e6',
+                    borderRadius: '8px',
+                    fontSize: '0.95rem'
+                  }}
+                />
+                <div style={{ fontSize: '0.85rem', color: '#6c757d' }}>
+                  {searchQuery && `Matching by ID, Name or Category`}
+                </div>
+              </div>
+            </div>
+          </div>
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
@@ -937,12 +1482,13 @@ const AdminPortal = ({ user, onLogout }) => {
                     <th>Name</th>
                     <th>Category</th>
                     <th>Price</th>
+                    <th>Product price</th>
                     <th>Available</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {menuItems.map(item => (
+                  { menuItems.map(item => (
                     <tr key={item.id}>
                       <td>{item.id}</td>
                       <td>
@@ -966,9 +1512,28 @@ const AdminPortal = ({ user, onLogout }) => {
                           <span style={{ color: '#6c757d', fontSize: '1.5rem' }}>📷</span>
                         )}
                       </td>
-                      <td>{item.name}</td>
-                      <td>{item.category?.name || item.category_name || 'N/A'}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 260 }} title={item.name || ''}>
+                          {item.name}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className="cell-truncate"
+                          style={{ maxWidth: 220 }}
+                          title={item.category?.name || item.category_name || 'N/A'}
+                        >
+                          {item.category?.name || item.category_name || 'N/A'}
+                        </span>
+                      </td>
                       <td>PKR {parseFloat(item.price).toFixed(2)}</td>
+                      <td>
+                        {item.productPrice != null && item.productPrice !== ''
+                          ? `PKR ${Number(item.productPrice)}`
+                          : (item.product_price != null && item.product_price !== ''
+                            ? `PKR ${Number(item.product_price)}`
+                            : '—')}
+                      </td>
                       <td>
                         <span
                           className={`status-badge ${item.available ? 'active' : 'inactive'}`}
@@ -989,6 +1554,10 @@ const AdminPortal = ({ user, onLogout }) => {
                             name: item.name,
                             category_id: item.categoryId || item.category_id || '',  // Handle both formats
                             price: item.price,
+                            product_price:
+                              item.productPrice != null && item.productPrice !== ''
+                                ? String(item.productPrice)
+                                : (item.product_price != null && item.product_price !== '' ? String(item.product_price) : ''),
                             description: item.description || '',
                             image_url: item.imageUrl || item.image_url || '',  // Handle both formats
                             available: item.available === 1 || item.available === true ? 1 : 0
@@ -1010,6 +1579,10 @@ const AdminPortal = ({ user, onLogout }) => {
           <CustomerManagement />
         )}
 
+        {activeTab === 'expenses' && (
+          <ExpenseHistory />
+        )}
+
         {activeTab === 'settings' && (
           <div className="settings-tab">
             <h1>System Settings</h1>
@@ -1022,11 +1595,13 @@ const AdminPortal = ({ user, onLogout }) => {
             </div>
           </div>
         )}
+          </>
+        )}
       </div>
 
       {/* User Modal */}
       {showUserModal && (
-        <div className="modal-overlay" onClick={() => setShowUserModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowUserModal(false); setShowUserPassword(false); }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h2>{editingUser ? 'Edit User' : 'Add New User'}</h2>
             <form onSubmit={handleUserSubmit}>
@@ -1042,24 +1617,26 @@ const AdminPortal = ({ user, onLogout }) => {
                 </div>
                 <div className="form-group">
                   <label>Password {!editingUser && '*'}</label>
-                  <input
-                    type="password"
-                    value={userForm.password}
-                    onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
-                    required={!editingUser}
-                    placeholder={editingUser ? 'Leave blank to keep current' : ''}
-                  />
+                  <div className="password-input-wrapper">
+                    <input
+                      type={showUserPassword ? 'text' : 'password'}
+                      value={userForm.password}
+                      onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+                      required={!editingUser}
+                      placeholder={editingUser ? 'Leave blank to keep current' : ''}
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle-btn"
+                      onClick={() => setShowUserPassword(!showUserPassword)}
+                      aria-label={showUserPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showUserPassword ? <FaEyeSlash /> : <FaEye />}
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="form-group">
-                <label>Full Name *</label>
-                <input
-                  type="text"
-                  value={userForm.full_name}
-                  onChange={(e) => setUserForm({ ...userForm, full_name: e.target.value })}
-                  required
-                />
-              </div>
+              {/* Full name field removed from UI; backend fullName is derived from username or existing data */}
               <div className="form-row">
                 <div className="form-group">
                   <label>Role *</label>
@@ -1070,6 +1647,7 @@ const AdminPortal = ({ user, onLogout }) => {
                   >
                     <option value="manager">Manager</option>
                     <option value="admin">Admin</option>
+                    <option value="staff">Staff</option>
                   </select>
                 </div>
                 <div className="form-group">
@@ -1102,8 +1680,21 @@ const AdminPortal = ({ user, onLogout }) => {
                   />
                 </div>
               </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Monthly salary (optional)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={userForm.monthly_salary}
+                    onChange={(e) => setUserForm({ ...userForm, monthly_salary: e.target.value })}
+                    placeholder="e.g. 50000"
+                  />
+                </div>
+              </div>
               <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => setShowUserModal(false)}>
+                <button type="button" className="btn-secondary" onClick={() => { setShowUserModal(false); setShowUserPassword(false); }}>
                   Cancel
                 </button>
                 <button type="submit" className="btn-primary">
@@ -1157,6 +1748,7 @@ const AdminPortal = ({ user, onLogout }) => {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h2>{editingMenuItem ? 'Edit Menu Item' : 'Add New Menu Item'}</h2>
             <form onSubmit={handleMenuSubmit}>
+              {/* add limit of 100 characters to the item name */}
               <div className="form-group">
                 <label>Item Name *</label>
                 <input
@@ -1165,6 +1757,19 @@ const AdminPortal = ({ user, onLogout }) => {
                   onChange={(e) => setMenuForm({ ...menuForm, name: e.target.value })}
                   required
                 />
+                {menuForm.name && menuForm.name.length > 100 && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    background: '#fff5f5',
+                    border: '1px solid #ffc9c9',
+                    borderRadius: '6px',
+                    color: '#c92a2a',
+                    fontSize: '0.875rem'
+                  }}>
+                    ⚠️ Item name must be less than 100 characters
+                  </div>
+                )}
               </div>
               <div className="form-row">
                 <div className="form-group">
@@ -1190,15 +1795,40 @@ const AdminPortal = ({ user, onLogout }) => {
                     required
                   />
                 </div>
+                <div className="form-group">
+                  <label>Product price (optional)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={menuForm.product_price}
+                    onChange={(e) => setMenuForm({ ...menuForm, product_price: e.target.value })}
+                    placeholder="Whole PKR amount"
+                  />
+                </div>
               </div>
               <div className="form-group">
+                {/* add limit of 1000 characters to the description */}
                 <label>Description</label>
                 <textarea
                   value={menuForm.description}
                   onChange={(e) => setMenuForm({ ...menuForm, description: e.target.value })}
                   rows="3"
                 />
+                {menuForm.description && menuForm.description.length > 1000 && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.5rem',
+                    background: '#fff5f5',
+                    border: '1px solid #ffc9c9',
+                    borderRadius: '6px',
+                    color: '#c92a2a',
+                    fontSize: '0.875rem'
+                  }}>
+                    ⚠️ Description must be less than 1000 characters
+                  </div>
+                )}
               </div>
+              {/* add limit of 100 characters to the image url */}
               <div className="form-group">
                 <label>Image URL</label>
                 <input
@@ -1308,7 +1938,7 @@ const AdminPortal = ({ user, onLogout }) => {
                     }}
                   />
                   <span>
-                    {menuForm.available === 1 ? '✅ Available' : '❌ Unavailable'}
+                    {menuForm.available === 1 ? 'Available' : 'Unavailable'}
                   </span>
                 </label>
                 <div style={{
@@ -1324,7 +1954,22 @@ const AdminPortal = ({ user, onLogout }) => {
                 <button type="button" className="btn-secondary" onClick={() => setShowMenuModal(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="btn-primary">
+                {/* If the item name or description is too long, disable button and button ui become gray button and with no pointer cursor on it */}
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={
+                    (menuForm.name && menuForm.name.length > 100) ||
+                    (menuForm.description && menuForm.description.length > 1000)
+                  }
+                  style={{
+                    cursor:
+                      (menuForm.name && menuForm.name.length > 100) ||
+                      (menuForm.description && menuForm.description.length > 1000)
+                        ? 'not-allowed'
+                        : 'pointer'
+                  }}
+                >
                   {editingMenuItem ? 'Update' : 'Create'}
                 </button>
               </div>

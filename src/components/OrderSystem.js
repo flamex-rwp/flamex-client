@@ -6,11 +6,23 @@ import OfflineIndicator from './OfflineIndicator';
 import { customerAPI } from '../services/customerAPI';
 import { saveOfflineOrder, cacheMenuItems, getCachedMenuItems, getCachedTableAvailability, getOfflineOrderById, updateOfflineOrder, addPendingOperation, getAllOrders, cacheTableAvailability } from '../utils/offlineDB';
 import { isOnline } from '../utils/offlineSync';
-import { isOnline as checkServerOnline } from '../services/offlineSyncService';
 import { useToast } from '../contexts/ToastContext';
 import { keyboardShortcuts } from '../utils/keyboardShortcuts';
 import EmptyState from './EmptyState';
 import CustomerAddressSelector from './CustomerAddressSelector';
+import { Spinner } from './LoadingSkeleton';
+import {
+  FaUtensils,
+  FaSearch,
+  FaShoppingCart,
+  FaSave,
+  FaTruck,
+  FaClipboard,
+  FaExclamationTriangle,
+  FaTag,
+  FaStickyNote,
+  FaLightbulb
+} from 'react-icons/fa';
 
 const createCartTemplate = (id, name = `Cart ${id}`) => ({
   id,
@@ -21,6 +33,7 @@ const createCartTemplate = (id, name = `Cart ${id}`) => ({
   specialInstructions: '',
   orderType: 'dine_in',
   tableNumber: '',
+  autoTableNumber: false,
   deliveryName: '',
   deliveryPhone: '',
   deliveryBackupPhone: '',
@@ -32,14 +45,95 @@ const createCartTemplate = (id, name = `Cart ${id}`) => ({
   discountPercent: 0
 });
 
-const OrderSystem = () => {
+function getPosCartStorageKey() {
+  try {
+    const rawUser = localStorage.getItem('user');
+    if (rawUser) {
+      const parsed = JSON.parse(rawUser);
+      const userId = parsed?.id ?? parsed?.userId ?? parsed?._id;
+      if (userId !== null && userId !== undefined && String(userId).trim() !== '') {
+        return `pos:carts:${String(userId)}`;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return 'pos:carts:anonymous';
+}
+
+function computeNextCartIdFromList(cartsArr) {
+  const maxId = (Array.isArray(cartsArr) ? cartsArr : [])
+    .map(c => Number(c?.id) || 0)
+    .reduce((acc, id) => Math.max(acc, id), 0);
+  return Math.max(1, maxId + 1);
+}
+
+/** Sync read so first paint matches sessionStorage (avoids cart panel flash on remount). */
+function readPersistedCartStateFromSession() {
+  try {
+    const key = getPosCartStorageKey();
+    const stored = sessionStorage.getItem(key);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    const storedCarts = parsed?.carts;
+    const storedActiveCartId = parsed?.activeCartId;
+    const storedNextCartId = parsed?.nextCartId;
+    if (!Array.isArray(storedCarts) || storedCarts.length === 0) return null;
+
+    const normalizedCarts = storedCarts
+      .filter(c => c && typeof c === 'object')
+      .map((c, idx) => ({
+        ...createCartTemplate(Number(c.id) || (idx + 1), c.name || `Cart ${Number(c.id) || (idx + 1)}`),
+        ...c,
+        id: Number(c.id) || (idx + 1),
+        items: Array.isArray(c.items) ? c.items : [],
+      }));
+
+    const fallbackActiveId = normalizedCarts[0]?.id || 1;
+    const desiredActiveId = Number(storedActiveCartId) || fallbackActiveId;
+    const finalActiveId = normalizedCarts.some(c => c.id === desiredActiveId) ? desiredActiveId : fallbackActiveId;
+    const computedNext = computeNextCartIdFromList(normalizedCarts);
+    const safeNext = Number(storedNextCartId) || computedNext;
+
+    return {
+      carts: normalizedCarts,
+      activeCartId: finalActiveId,
+      nextCartId: Math.max(computedNext, safeNext),
+    };
+  } catch (e) {
+    try {
+      sessionStorage.removeItem(getPosCartStorageKey());
+    } catch (_) {
+      // ignore
+    }
+    return null;
+  }
+}
+
+function getInitialCartSlice() {
+  const p = readPersistedCartStateFromSession();
+  if (p) return p;
+  return {
+    carts: [createCartTemplate(1, 'Cart 1')],
+    activeCartId: 1,
+    nextCartId: 2,
+  };
+}
+
+/** Survives OrderSystem unmount when navigating away from POS routes (same SPA session). */
+let lastMenuItemsSnapshot = null;
+
+const OrderSystem = ({ basePath = '/manager' }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { showSuccess, showError, showInfo } = useToast();
-  const [menuItems, setMenuItems] = useState([]);
+  const [menuItems, setMenuItems] = useState(() => lastMenuItemsSnapshot ?? []);
+  const [menuInitialLoading, setMenuInitialLoading] = useState(
+    () => !((lastMenuItemsSnapshot?.length) > 0)
+  );
 
   // Helper function to get initials for fallback image
   const getInitials = (name) => {
-    if (!name) return '🍽️';
+    if (!name) return '';
     return name
       .split(' ')
       .map(word => word.charAt(0))
@@ -48,26 +142,127 @@ const OrderSystem = () => {
       .toUpperCase();
   };
 
+  // Helper to normalize image list for an item (supports single or multiple images)
+  const getItemImages = (item) => {
+    if (!item) return [];
+
+    // Prefer explicit images array fields if present
+    if (Array.isArray(item.images) && item.images.length > 0) {
+      return item.images
+        .filter(Boolean)
+        .map(img => (typeof img === 'string' ? img : img.url || img.imageUrl || img.path))
+        .filter(Boolean);
+    }
+
+    if (Array.isArray(item.imageUrls) && item.imageUrls.length > 0) {
+      return item.imageUrls.filter(Boolean);
+    }
+
+    if (item.gallery && Array.isArray(item.gallery) && item.gallery.length > 0) {
+      return item.gallery.filter(Boolean);
+    }
+
+    // Fallback to single imageUrl if available
+    if (item.imageUrl) {
+      return [item.imageUrl];
+    }
+
+    return [];
+  };
+
   // Add these missing state variables
   const [selectedCategory, setSelectedCategory] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const searchDebounceRef = useRef(null);
 
-  const [carts, setCarts] = useState([createCartTemplate(1, 'Cart 1')]);
-  const [activeCartId, setActiveCartId] = useState(1);
-  const [nextCartId, setNextCartId] = useState(2);
+  const initialCartSliceRef = useRef(null);
+  if (initialCartSliceRef.current === null) {
+    initialCartSliceRef.current = getInitialCartSlice();
+  }
+  const initialCartSlice = initialCartSliceRef.current;
+  const [carts, setCarts] = useState(initialCartSlice.carts);
+  const [activeCartId, setActiveCartId] = useState(initialCartSlice.activeCartId);
+  const [nextCartId, setNextCartId] = useState(initialCartSlice.nextCartId);
   const [checkoutError, setCheckoutError] = useState('');
+  const checkoutSubmittingRef = useRef(false);
+  const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
   const [editLoadError, setEditLoadError] = useState('');
   const [occupiedTables, setOccupiedTables] = useState([]);
   const [phoneSuggestions, setPhoneSuggestions] = useState([]);
   const [showPhoneSuggestions, setShowPhoneSuggestions] = useState(false);
+  const [nameSuggestions, setNameSuggestions] = useState([]);
+  const [showNameSuggestions, setShowNameSuggestions] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [phoneSearchLoading, setPhoneSearchLoading] = useState(false);
+  const [nameSearchLoading, setNameSearchLoading] = useState(false);
+  const [selectedMenuItem, setSelectedMenuItem] = useState(null);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+  const [selectedItemImageIndex, setSelectedItemImageIndex] = useState(0);
   const reserveTableRef = useRef(null);
   const releaseTableRef = useRef(null);
+  const updateCustomerDebounceRef = useRef(null);
+  const cartPersistDebounceRef = useRef(null);
+
+  const getCartStorageKey = useCallback(() => getPosCartStorageKey(), []);
+
+  const clearPersistedCartState = useCallback(() => {
+    try {
+      const key = getCartStorageKey();
+      sessionStorage.removeItem(key);
+    } catch (e) {}
+  }, [getCartStorageKey]);
+
+  const computeNextCartId = useCallback((cartsArr) => {
+    const maxId = (Array.isArray(cartsArr) ? cartsArr : [])
+      .map(c => Number(c?.id) || 0)
+      .reduce((acc, id) => Math.max(acc, id), 0);
+    return Math.max(1, maxId + 1);
+  }, []);
+
+  // Persist carts to sessionStorage (session-only, per user)
+  useEffect(() => {
+    const key = getCartStorageKey();
+
+    if (cartPersistDebounceRef.current) {
+      clearTimeout(cartPersistDebounceRef.current);
+    }
+
+    cartPersistDebounceRef.current = setTimeout(() => {
+      try {
+        const payload = JSON.stringify({ carts, activeCartId, nextCartId });
+        sessionStorage.setItem(key, payload);
+      } catch (e) {
+        // Ignore quota / serialization errors.
+      }
+    }, 250);
+
+    return () => {
+      if (cartPersistDebounceRef.current) {
+        clearTimeout(cartPersistDebounceRef.current);
+      }
+    };
+  }, [carts, activeCartId, nextCartId, getCartStorageKey]);
+
+  // Cart tabs horizontal scrolling helper (when there are many carts)
+  const cartTabsScrollRef = useRef(null);
+  const [showCartTabsRightArrow, setShowCartTabsRightArrow] = useState(false);
+  const updateCartTabsRightArrow = useCallback(() => {
+    const el = cartTabsScrollRef.current;
+    if (!el) return;
+    const hasMore = el.scrollLeft + el.clientWidth < el.scrollWidth - 5;
+    setShowCartTabsRightArrow(hasMore);
+  }, []);
+  const scrollCartTabsRight = useCallback(() => {
+    const el = cartTabsScrollRef.current;
+    if (!el) return;
+    el.scrollBy({
+      left: Math.max(200, el.clientWidth * 0.8),
+      behavior: 'smooth'
+    });
+  }, []);
 
   const activeCart = carts.find(c => c.id === activeCartId) || carts[0];
   const cart = activeCart.items;
@@ -75,10 +270,16 @@ const OrderSystem = () => {
   const specialInstructions = activeCart.specialInstructions;
   const orderType = activeCart.orderType || 'dine_in';
   const tableNumber = activeCart.tableNumber || '';
+  const autoTableNumber = !!activeCart.autoTableNumber;
   const deliveryName = activeCart.deliveryName || '';
   const deliveryPhone = activeCart.deliveryPhone || '';
   const deliveryBackupPhone = activeCart.deliveryBackupPhone || '';
-  const deliveryAddress = activeCart.deliveryAddress || '';
+  // Ensure deliveryAddress is always a string (handle object case from CustomerAddressSelector)
+  const deliveryAddress = typeof activeCart.deliveryAddress === 'string' 
+    ? activeCart.deliveryAddress 
+    : (typeof activeCart.deliveryAddress === 'object' && activeCart.deliveryAddress?.address 
+      ? activeCart.deliveryAddress.address 
+      : '');
   const deliveryNotes = activeCart.deliveryNotes || '';
   const googleMapsLink = activeCart.googleMapsLink || '';
   const deliveryCharge = activeCart.deliveryCharge === 0 ? '0' : (activeCart.deliveryCharge || '');
@@ -86,6 +287,16 @@ const OrderSystem = () => {
   const discountPercent = activeCart.discountPercent || 0;
   const isDelivery = orderType === 'delivery';
   const parsedDeliveryCharge = deliveryCharge === '' ? 0 : (parseFloat(deliveryCharge) || 0);
+
+  const getLocalDateKey = useCallback((value) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
 
   useEffect(() => {
     const fetchOccupiedTables = async () => {
@@ -101,12 +312,41 @@ const OrderSystem = () => {
             tableNumber: t.tableNumber || t.table_number,
             id: t.id,
             orderId: t.id,
-            orderNumber: t.orderNumber || t.order_number
+            orderNumber: t.orderNumber || t.order_number,
+            createdAt: t.createdAt || t.created_at || t.orderDate || t.order_date || null,
           }));
-          setOccupiedTables(normalizedTables);
+
+          // Only treat tables as occupied if the pending dine-in order is from today (local time)
+          const todayKey = getLocalDateKey(new Date());
+          const withOrderDates = await Promise.all(
+            normalizedTables.map(async (t) => {
+              const alreadyHasDateKey = getLocalDateKey(t.createdAt);
+              if (alreadyHasDateKey) return t;
+
+              const id = t.orderId || t.id;
+              if (!id) return t;
+
+              try {
+                const orderRes = await ordersAPI.getById(id);
+                const order = orderRes.data?.data ?? orderRes.data ?? {};
+                const created = order.createdAt || order.created_at || order.orderDate || order.order_date || null;
+                return { ...t, createdAt: created };
+              } catch (e) {
+                // If we can't fetch the order date, be conservative and keep it occupied
+                return t;
+              }
+            })
+          );
+
+          const filteredTables = withOrderDates.filter((t) => {
+            const key = getLocalDateKey(t.createdAt);
+            return key && key === todayKey;
+          });
+
+          setOccupiedTables(filteredTables);
           // Persist latest server state to offline cache so going offline reflects reality
           try {
-            await cacheTableAvailability(normalizedTables);
+            await cacheTableAvailability(filteredTables);
           } catch (err) {
             console.warn('[OrderSystem] Failed to cache latest table availability:', err);
           }
@@ -386,6 +626,53 @@ const OrderSystem = () => {
     updateActiveCart({ specialInstructions: instructions });
   };
 
+  // Auto-select first available table when switching to dine-in
+  useEffect(() => {
+    if (isDelivery || editingOrder) return; // Don't auto-select if delivery or editing existing order
+
+    // If "takeaway" is selected manually, never auto-switch it.
+    // If it was auto-selected (because all tables were full), allow auto-switching
+    // when a table becomes available again.
+    if (tableNumber === 'takeaway' && !autoTableNumber) return;
+
+    // If a numeric table is already selected and available, keep it
+    if (tableNumber) {
+      const tableNum = parseInt(tableNumber);
+      if (!isNaN(tableNum)) {
+        const isOccupied = occupiedTables.some(t => {
+          const occupiedTableNum = t.tableNumber || t.table_number;
+          if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+          return String(occupiedTableNum) === String(tableNum);
+        });
+        if (!isOccupied) {
+          return; // Current table is available, keep it
+        }
+      }
+    }
+    
+    // Find first available table (1-9)
+    const allTables = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const availableTable = allTables.find(tableNum => {
+      return !occupiedTables.some(t => {
+        const occupiedTableNum = t.tableNumber || t.table_number;
+        if (occupiedTableNum === null || occupiedTableNum === undefined) return false;
+        return String(occupiedTableNum) === String(tableNum);
+      });
+    });
+    
+    // Select first available table, or "takeaway" if all are occupied
+    if (availableTable !== undefined) {
+      updateActiveCart({ tableNumber: availableTable.toString(), autoTableNumber: true });
+    } else {
+      updateActiveCart({ tableNumber: 'takeaway', autoTableNumber: true });
+    }
+  }, [isDelivery, occupiedTables, editingOrder, tableNumber, autoTableNumber, updateActiveCart]); // Re-run when order type or occupied tables change
+
+  useEffect(() => {
+    // Re-check if the cart tabs row overflows whenever carts change.
+    updateCartTabsRightArrow();
+  }, [carts.length, activeCartId, updateCartTabsRightArrow]);
+
   const handleOrderTypeChange = (type) => {
     setCheckoutError('');
     updateActiveCart({ orderType: type });
@@ -411,9 +698,87 @@ const OrderSystem = () => {
     setCheckoutError('');
   };
 
+  // Debounced function to update customer data when fields change
+  const updateCustomerData = useCallback(async () => {
+    if (!selectedCustomer || !selectedCustomer.id) return;
+    
+    const customerIdStr = String(selectedCustomer.id ?? '');
+    const isOfflineId = typeof selectedCustomer.id === 'string' && customerIdStr.startsWith('OFFLINE-');
+    
+    // Don't update if offline customer
+    if (isOfflineId) return;
+    
+    try {
+      const updateData = {};
+      
+      // Update customer fields if they've changed
+      if (deliveryName.trim() && deliveryName.trim() !== selectedCustomer.name) {
+        updateData.name = deliveryName.trim();
+      }
+      if (deliveryPhone.trim() && deliveryPhone.trim().replace(/\s+/g, '') !== selectedCustomer.phone?.replace(/\s+/g, '')) {
+        updateData.phone = deliveryPhone.trim().replace(/\s+/g, '');
+      }
+      if (deliveryBackupPhone.trim() !== (selectedCustomer.backupPhone || selectedCustomer.backup_phone || '')) {
+        updateData.backupPhone = deliveryBackupPhone.trim() || undefined;
+      }
+      if (deliveryNotes.trim() !== (selectedCustomer.notes || '')) {
+        updateData.notes = deliveryNotes.trim() || undefined;
+      }
+      if (googleMapsLink.trim() && googleMapsLink.trim() !== (selectedCustomer.googleLink || selectedCustomer.google_link || '')) {
+        updateData.googleLink = googleMapsLink.trim();
+      }
+      
+      // Only update if there are changes
+      if (Object.keys(updateData).length > 0) {
+        await customerAPI.update(selectedCustomer.id, updateData);
+        
+        // Reload customer to get updated data
+        const response = await customerAPI.getById(selectedCustomer.id);
+        const updatedCustomer = response.data?.data || response.data;
+        setSelectedCustomer(updatedCustomer);
+      }
+      
+      // Also update address if address changed and has googleMapsLink
+      const safeDeliveryAddress = typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '';
+      const safeGoogleMapsLink = typeof googleMapsLink === 'string' ? googleMapsLink.trim() : '';
+      if (safeDeliveryAddress && safeGoogleMapsLink) {
+        const customerResponse = await customerAPI.getById(selectedCustomer.id);
+        const customer = customerResponse.data?.data || customerResponse.data;
+        if (customer && customer.addresses && customer.addresses.length > 0) {
+          const matchingAddress = customer.addresses.find(addr => 
+            addr.address && addr.address.trim().toLowerCase() === safeDeliveryAddress.toLowerCase()
+          );
+          
+          if (matchingAddress && (!matchingAddress.googleMapsLink || !matchingAddress.google_maps_link)) {
+            try {
+              await customerAPI.updateAddress(matchingAddress.id, {
+                googleMapsLink: googleMapsLink.trim()
+              });
+            } catch (updateErr) {
+              console.warn('Failed to update customer address with Google Maps link:', updateErr);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to update customer data:', err);
+      // Don't show error to user - this is a background update
+    }
+  }, [selectedCustomer, deliveryName, deliveryPhone, deliveryBackupPhone, deliveryNotes, googleMapsLink, deliveryAddress]);
+
   const handleDeliveryFieldChange = (field, value) => {
     updateActiveCart({ [field]: value });
     setCheckoutError('');
+    
+    // Debounce customer update when fields change (only if customer is selected)
+    if (selectedCustomer && selectedCustomer.id) {
+      if (updateCustomerDebounceRef.current) {
+        clearTimeout(updateCustomerDebounceRef.current);
+      }
+      updateCustomerDebounceRef.current = setTimeout(() => {
+        updateCustomerData();
+      }, 2000); // Wait 2 seconds after user stops typing
+    }
   };
 
   const handleTableNumberChange = (value) => {
@@ -450,7 +815,8 @@ const OrderSystem = () => {
       }
     }
 
-    updateActiveCart({ tableNumber: value });
+    // Any direct user selection should disable "auto table" behavior for takeaway.
+    updateActiveCart({ tableNumber: value, autoTableNumber: false });
     setCheckoutError('');
   };
 
@@ -465,23 +831,74 @@ const OrderSystem = () => {
     return /^[03]/.test(cleaned);
   };
 
+  const DELIVERY_NOTES_MAX_LENGTH = 300;
+
+  const normalizeLikelyUrl = (raw) => {
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^(www\.|maps\.|google\.)/i.test(s)) return `https://${s}`;
+    return s;
+  };
+
+  const isValidGoogleMapsLink = (raw) => {
+    const normalized = normalizeLikelyUrl(raw);
+    if (!normalized) return true; // optional field
+    try {
+      const url = new URL(normalized);
+      if (!(url.protocol === 'http:' || url.protocol === 'https:')) return false;
+
+      const host = url.hostname.toLowerCase();
+      const path = url.pathname.toLowerCase();
+      const isAllowedHost =
+        host === 'goo.gl' ||
+        host.endsWith('.goo.gl') ||
+        host === 'maps.app.goo.gl' ||
+        host === 'google.com' ||
+        host.endsWith('.google.com');
+
+      if (!isAllowedHost) return false;
+      // For google.com links, expect a maps path or typical maps redirect params
+      if (host.includes('google.com')) {
+        const hasMapsPath = path.includes('/maps') || path.startsWith('/maps');
+        const hasMapsQuery = url.searchParams.has('q') || url.searchParams.has('query') || url.searchParams.has('destination');
+        if (!hasMapsPath && !hasMapsQuery) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const validateDeliveryFields = () => {
-    if (!deliveryName.trim()) {
+    const safeDeliveryName = typeof deliveryName === 'string' ? deliveryName.trim() : '';
+    const safeDeliveryPhone = typeof deliveryPhone === 'string' ? deliveryPhone.trim() : '';
+    const safeDeliveryAddress = typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '';
+    const safeDeliveryNotes = typeof deliveryNotes === 'string' ? deliveryNotes : '';
+    const safeGoogleMapsLink = typeof googleMapsLink === 'string' ? googleMapsLink.trim() : '';
+    
+    if (!safeDeliveryName) {
       return 'Delivery customer name is required.';
     }
-    if (!deliveryPhone.trim()) {
+    if (!safeDeliveryPhone) {
       return 'Phone number is required.';
     }
     // Check length first
-    const cleanedPhone = deliveryPhone.trim().replace(/\s+/g, '').replace(/[^0-9]/g, '');
+    const cleanedPhone = safeDeliveryPhone.replace(/\s+/g, '').replace(/[^0-9]/g, '');
     if (cleanedPhone.length > 11) {
       return 'Phone number must be maximum 11 digits (e.g., 03001234567).';
     }
-    if (!phoneIsValid(deliveryPhone)) {
+    if (!phoneIsValid(safeDeliveryPhone)) {
       return 'Enter a valid phone number (10-11 digits starting with 0 or 3, e.g., 03001234567).';
     }
-    if (!deliveryAddress.trim()) {
+    if (!safeDeliveryAddress) {
       return 'Delivery address is required.';
+    }
+    if (safeDeliveryNotes.length > DELIVERY_NOTES_MAX_LENGTH) {
+      return `Notes / Instructions must be ${DELIVERY_NOTES_MAX_LENGTH} characters or less.`;
+    }
+    if (safeGoogleMapsLink && !isValidGoogleMapsLink(safeGoogleMapsLink)) {
+      return 'Please paste a valid Google Maps link (starting with http/https).';
     }
     return '';
   };
@@ -551,9 +968,90 @@ const OrderSystem = () => {
   const handlePhoneChange = (value) => {
     handleDeliveryFieldChange('deliveryPhone', value);
     handlePhoneSearch(value);
-    setSelectedCustomer(null);
-    // Clear address when phone changes
-    handleDeliveryFieldChange('deliveryAddress', '');
+    // Don't clear selectedCustomer when editing - let the update function handle it
+    // Only clear address if no customer is selected
+    if (!selectedCustomer) {
+      handleDeliveryFieldChange('deliveryAddress', '');
+    }
+  };
+
+  // Handle name search for suggestions
+  const handleNameSearch = useCallback(async (nameValue) => {
+    const trimmedName = nameValue.trim();
+    if (trimmedName.length < 1) {
+      setNameSuggestions([]);
+      setShowNameSuggestions(false);
+      setSelectedCustomer(null);
+      return;
+    }
+
+    setNameSearchLoading(true);
+    try {
+      let customers = [];
+
+      // Check if offline - use cached customers
+      if (!isOnline()) {
+        const { getCachedCustomers } = await import('../utils/offlineDB');
+        const cachedCustomers = await getCachedCustomers();
+        // Filter customers by name (case-insensitive partial match)
+        const normalizedSearch = trimmedName.toLowerCase();
+        customers = cachedCustomers.filter(c => {
+          const customerName = (c.name || '').toLowerCase();
+          return customerName.includes(normalizedSearch);
+        }).slice(0, 10);
+      } else {
+        // Online - use API (search by name or phone)
+        try {
+          const response = await customerAPI.search(trimmedName);
+          customers = response.data?.data || response.data || [];
+
+          // Filter to prioritize name matches
+          const normalizedSearch = trimmedName.toLowerCase();
+          customers = customers.filter(c => {
+            const customerName = (c.name || '').toLowerCase();
+            return customerName.includes(normalizedSearch);
+          }).slice(0, 10);
+
+          // Cache customers for offline use
+          if (Array.isArray(customers) && customers.length > 0) {
+            const { cacheCustomers } = await import('../utils/offlineDB');
+            await cacheCustomers(customers);
+          }
+        } catch (apiErr) {
+          // If API fails, fall back to cached customers
+          if (apiErr.code === 'ERR_NETWORK' || !apiErr.response) {
+            const { getCachedCustomers } = await import('../utils/offlineDB');
+            const cachedCustomers = await getCachedCustomers();
+            const normalizedSearch = trimmedName.toLowerCase();
+            customers = cachedCustomers.filter(c => {
+              const customerName = (c.name || '').toLowerCase();
+              return customerName.includes(normalizedSearch);
+            }).slice(0, 10);
+          } else {
+            throw apiErr;
+          }
+        }
+      }
+
+      setNameSuggestions(Array.isArray(customers) ? customers : []);
+      setShowNameSuggestions(true);
+    } catch (err) {
+      console.error('Failed to search customers by name:', err);
+      setNameSuggestions([]);
+    } finally {
+      setNameSearchLoading(false);
+    }
+  }, []);
+
+  // Handle name input change
+  const handleNameChange = (value) => {
+    handleDeliveryFieldChange('deliveryName', value);
+    handleNameSearch(value);
+    // Don't clear selectedCustomer when editing - let the update function handle it
+    // Only clear address if no customer is selected
+    if (!selectedCustomer) {
+      handleDeliveryFieldChange('deliveryAddress', '');
+    }
   };
 
   // Handle customer selection from phone suggestions
@@ -590,6 +1088,16 @@ const OrderSystem = () => {
         if (firstAddress) {
           updateActiveCart({ deliveryAddress: firstAddress });
         }
+
+        // Set Google Maps link from customer's google_link or first address's googleMapsLink
+        const customerMapsLink = fullCustomer.googleLink || fullCustomer.google_link;
+        const addressMapsLink = fullCustomer.addresses && fullCustomer.addresses.length > 0
+          ? (fullCustomer.addresses[0].googleMapsLink || fullCustomer.addresses[0].google_maps_link)
+          : null;
+        const mapsLink = customerMapsLink || addressMapsLink;
+        if (mapsLink) {
+          updateActiveCart({ googleMapsLink: mapsLink });
+        }
       } else {
         // Offline or offline customer - use cached data
         setSelectedCustomer(customer);
@@ -598,6 +1106,16 @@ const OrderSystem = () => {
           : customer.address || '';
         if (firstAddress) {
           updateActiveCart({ deliveryAddress: firstAddress });
+        }
+
+        // Set Google Maps link from customer's google_link or first address's googleMapsLink
+        const customerMapsLink = customer.googleLink || customer.google_link;
+        const addressMapsLink = customer.addresses && customer.addresses.length > 0
+          ? (customer.addresses[0].googleMapsLink || customer.addresses[0].google_maps_link)
+          : null;
+        const mapsLink = customerMapsLink || addressMapsLink;
+        if (mapsLink) {
+          updateActiveCart({ googleMapsLink: mapsLink });
         }
       }
     } catch (err) {
@@ -610,174 +1128,267 @@ const OrderSystem = () => {
       if (firstAddress) {
         updateActiveCart({ deliveryAddress: firstAddress });
       }
+
+      // Set Google Maps link from customer's google_link or first address's googleMapsLink
+      const customerMapsLink = customer.googleLink || customer.google_link;
+      const addressMapsLink = customer.addresses && customer.addresses.length > 0
+        ? (customer.addresses[0].googleMapsLink || customer.addresses[0].google_maps_link)
+        : null;
+      const mapsLink = customerMapsLink || addressMapsLink;
+      if (mapsLink) {
+        updateActiveCart({ googleMapsLink: mapsLink });
+      }
     }
   }, [updateActiveCart]);
 
+  const normalizeCustomerName = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.trim().replace(/\s+/g, ' ').toLowerCase();
+  };
+
+  const normalizeCustomerPhone = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.replace(/\s+/g, '').replace(/[^0-9]/g, '');
+  };
+
+  const normalizeCustomerAddress = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.trim().replace(/\s+/g, ' ');
+  };
+
+  const autoCreateCustomerRef = useRef({
+    lastKey: '',
+    inFlight: false,
+  });
+
+  const autoEnsureDeliveryCustomer = useCallback(async () => {
+    // Only auto-create when user is manually typing (no selected customer yet)
+    if (selectedCustomer && selectedCustomer.id) return;
+
+    const nameRaw = typeof deliveryName === 'string' ? deliveryName : '';
+    const phoneRaw = typeof deliveryPhone === 'string' ? deliveryPhone : '';
+    const addressRaw = typeof deliveryAddress === 'string' ? deliveryAddress : '';
+
+    const name = nameRaw.trim();
+    const phone = phoneRaw.trim();
+    const address = normalizeCustomerAddress(addressRaw);
+
+    if (!name || !phone || !address) return;
+    if (!phoneIsValid(phone)) return;
+
+    const key = `${normalizeCustomerName(name)}|${normalizeCustomerPhone(phone)}|${address}`;
+    if (autoCreateCustomerRef.current.inFlight) return;
+    if (autoCreateCustomerRef.current.lastKey === key) return;
+
+    autoCreateCustomerRef.current.inFlight = true;
+    try {
+      // Create or locate customer using existing checkout helper (will be updated to name+phone matching)
+      const customerId = await ensureDeliveryCustomer();
+      if (!customerId) return;
+
+      // Load full customer and set it as selected so addresses & updates work immediately
+      try {
+        const res = await customerAPI.getById(customerId);
+        const fullCustomer = res.data?.data || res.data;
+        if (fullCustomer) {
+          setSelectedCustomer(fullCustomer);
+        } else {
+          setSelectedCustomer({ id: customerId, name, phone, address });
+        }
+      } catch (err) {
+        setSelectedCustomer({ id: customerId, name, phone, address });
+      }
+
+      autoCreateCustomerRef.current.lastKey = key;
+    } catch (err) {
+      // Silent: user can still place order and ensureDeliveryCustomer will run again
+    } finally {
+      autoCreateCustomerRef.current.inFlight = false;
+    }
+  }, [selectedCustomer, deliveryName, deliveryPhone, deliveryAddress]);
+
   const ensureDeliveryCustomer = async () => {
-    const name = deliveryName.trim() || 'Delivery Customer';
-    const phone = deliveryPhone.trim().replace(/\s+/g, '');
-    const backup = deliveryBackupPhone.trim().replace(/\s+/g, '') || '';
-    const address = deliveryAddress.trim();
-    const notes = deliveryNotes.trim() || '';
+    const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
+    const name = (typeof deliveryName === 'string' ? deliveryName.trim() : '') || 'Delivery Customer';
+    const phoneRaw = typeof deliveryPhone === 'string' ? deliveryPhone.trim() : '';
+    const phone = normalizeCustomerPhone(phoneRaw);
+    const backup = (typeof deliveryBackupPhone === 'string' ? deliveryBackupPhone.trim() : '').replace(/\s+/g, '') || '';
+    const address = normalizeCustomerAddress(typeof deliveryAddress === 'string' ? deliveryAddress : '');
+    const notes = (typeof deliveryNotes === 'string' ? deliveryNotes.trim() : '') || '';
+    const mapsLink = (typeof googleMapsLink === 'string' ? googleMapsLink.trim() : '') || '';
 
     if (!phone) {
       throw new Error('Customer phone is required');
     }
 
-    // Check if offline - use cached customers or create offline customer
-    if (!isOnline()) {
+    const normName = normalizeCustomerName(name);
+    const normPhone = phone;
+
+    const hasAddress = !!address;
+    const online = isElectron ? true : await isOnline();
+
+    // OFFLINE: use cached customers keyed by (name + phone)
+    if (!online) {
       try {
-        const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
+        const { getCachedCustomers, saveCustomer, addPendingOperation } = await import('../utils/offlineDB');
         const cachedCustomers = await getCachedCustomers();
 
-        // Find existing customer by phone
-        const existingCustomer = cachedCustomers.find(c =>
-          (c.phone || '').replace(/\s+/g, '') === phone
-        );
+        const existingCustomer = cachedCustomers.find(c => {
+          return normalizeCustomerPhone(String(c.phone || '')) === normPhone &&
+            normalizeCustomerName(String(c.name || '')) === normName;
+        });
 
         if (existingCustomer) {
-          // Customer exists, check if address is different
-          const existingAddresses = existingCustomer.addresses || [];
-          const addressExists = existingAddresses.some(addr =>
-            (addr.address || '').trim() === address.trim()
-          );
+          if (hasAddress) {
+            const existingAddresses = Array.isArray(existingCustomer.addresses) ? existingCustomer.addresses : [];
+            const addressExists = existingAddresses.some(addr =>
+              normalizeCustomerAddress(String(addr?.address || '')) === address
+            );
 
-          // If address is different and provided, we'll queue it for sync
-          if (address && !addressExists) {
-            // Queue address update for sync
-            const { addPendingOperation } = await import('../utils/offlineDB');
-            await addPendingOperation({
-              type: 'update_customer_address',
-              endpoint: `/api/customers/${existingCustomer.id}/address`,
-              method: 'POST',
-              data: { address }
-            });
+            // Legacy address field match
+            const legacyAddress = normalizeCustomerAddress(String(existingCustomer.address || ''));
+            const legacyMatches = legacyAddress && legacyAddress === address;
+
+            if (!addressExists && !legacyMatches) {
+              // Update cached customer to include the new address in-memory
+              const newAddr = { address, isDefault: existingAddresses.length === 0, googleMapsLink: mapsLink || null };
+              const updatedCustomer = {
+                ...existingCustomer,
+                address: existingCustomer.address || address,
+                addresses: [...existingAddresses, newAddr],
+              };
+              await saveCustomer(updatedCustomer);
+
+              // Queue address update for sync
+              await addPendingOperation({
+                type: 'update_customer_address',
+                endpoint: `/api/customers/${existingCustomer.id}/addresses`,
+                method: 'POST',
+                data: { address, googleMapsLink: mapsLink || undefined }
+              });
+            }
           }
 
           return existingCustomer.id;
-        } else {
-          // Create offline customer
-          const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-          const newCustomer = {
-            id: offlineCustomerId,
-            phone,
-            name: name || 'Delivery Customer',
-            backupPhone: backup || null,
-            addresses: address ? [{ address, isDefault: true }] : [],
-            notes: notes || null,
-            synced: false,
-            createdAt: new Date().toISOString()
-          };
-
-          await saveCustomer(newCustomer);
-
-          // Queue customer creation for sync
-          const { addPendingOperation } = await import('../utils/offlineDB');
-          await addPendingOperation({
-            type: 'create_customer',
-            endpoint: '/api/customers/find-or-create',
-            method: 'POST',
-            data: {
-              phone,
-              name: name || undefined,
-              address: address || undefined,
-              backupPhone: backup || undefined,
-              notes: notes || undefined
-            },
-            offlineId: offlineCustomerId
-          });
-
-          return offlineCustomerId;
         }
+
+        // Create offline customer (new because (name+phone) doesn't match)
+        const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const newCustomer = {
+          id: offlineCustomerId,
+          phone,
+          name: name || 'Delivery Customer',
+          backupPhone: backup || null,
+          addresses: hasAddress ? [{ address, isDefault: true, googleMapsLink: mapsLink || null }] : [],
+          address: hasAddress ? address : '',
+          notes: notes || null,
+          googleLink: mapsLink || null,
+          synced: false,
+          createdAt: new Date().toISOString()
+        };
+
+        await saveCustomer(newCustomer);
+
+        // Queue customer creation for sync
+        await addPendingOperation({
+          type: 'create_customer',
+          endpoint: '/api/customers',
+          method: 'POST',
+          data: {
+            phone,
+            name: name || undefined,
+            address: hasAddress ? address : undefined,
+            backupPhone: backup || undefined,
+            notes: notes || undefined,
+            googleLink: mapsLink || undefined,
+            googleMapsLink: mapsLink || undefined,
+          },
+          offlineId: offlineCustomerId
+        });
+
+        return offlineCustomerId;
       } catch (offlineErr) {
         console.error('Failed to handle customer offline:', offlineErr);
-        // Fallback: create a temporary offline customer ID
         return `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       }
     }
 
-    // Online: Use findOrCreate API for automatic customer creation
+    // ONLINE: match by (name + phone). If match, update/add address; else create new.
     try {
-      const response = await customerAPI.findOrCreate({
-        phone,
-        name: name || undefined,
-        address: address || undefined,
-        backupPhone: backup || undefined,
-        notes: notes || undefined
-      });
-
-      const customer = response.data?.data || response.data;
-      return customer.id;
-    } catch (err) {
-      console.error('Failed to find or create customer:', err);
-
-      // If network error, fall back to offline mode
-      if (err.code === 'ERR_NETWORK' || !err.response) {
-        try {
-          const { getCachedCustomers, saveCustomer } = await import('../utils/offlineDB');
-          const cachedCustomers = await getCachedCustomers();
-
-          const existingCustomer = cachedCustomers.find(c =>
-            (c.phone || '').replace(/\s+/g, '') === phone
-          );
-
-          if (existingCustomer) {
-            // Customer exists - only add address if it's new, don't update user
-            if (address && address.trim()) {
-              const existingAddresses = existingCustomer.addresses || [];
-              const addressExists = existingAddresses.some(addr =>
-                (addr.address || '').trim().toLowerCase() === address.trim().toLowerCase()
-              );
-
-              if (!addressExists) {
-                const { addPendingOperation } = await import('../utils/offlineDB');
-                await addPendingOperation({
-                  type: 'add_customer_address',
-                  endpoint: `/api/customers/${existingCustomer.id}/addresses`,
-                  method: 'POST',
-                  data: { address: address.trim() }
-                });
-              }
-            }
-            return existingCustomer.id;
-          } else {
-            // Customer doesn't exist - create new entry
-            const offlineCustomerId = `OFFLINE-CUSTOMER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            const newCustomer = {
-              id: offlineCustomerId,
-              phone,
-              name: name || 'Delivery Customer',
-              backupPhone: backup || null,
-              addresses: address ? [{ address: address.trim(), isDefault: true }] : [],
-              notes: notes || null,
-              synced: false,
-              createdAt: new Date().toISOString()
-            };
-
-            await saveCustomer(newCustomer);
-
-            const { addPendingOperation } = await import('../utils/offlineDB');
-            await addPendingOperation({
-              type: 'create_customer',
-              endpoint: '/api/customers/find-or-create',
-              method: 'POST',
-              data: {
-                phone,
-                name: name || undefined,
-                address: address || undefined,
-                backupPhone: backup || undefined,
-                notes: notes || undefined
-              },
-              offlineId: offlineCustomerId
-            });
-
-            return offlineCustomerId;
-          }
-        } catch (fallbackErr) {
-          console.error('Fallback customer creation failed:', fallbackErr);
-        }
+      let candidates = [];
+      try {
+        const res = await customerAPI.searchByPhone(phone, 25);
+        candidates = res.data?.data || res.data || [];
+      } catch (searchErr) {
+        candidates = [];
       }
 
+      const match = Array.isArray(candidates) ? candidates.find(c => {
+        return normalizeCustomerPhone(String(c.phone || '')) === normPhone &&
+          normalizeCustomerName(String(c.name || '')) === normName;
+      }) : null;
+
+      if (match && match.id) {
+        // Same (name + phone) -> reuse, but update address if different
+        if (hasAddress) {
+          const legacyAddress = normalizeCustomerAddress(String(match.address || ''));
+          const addresses = Array.isArray(match.addresses) ? match.addresses : [];
+          const addressExists = addresses.some(a => normalizeCustomerAddress(String(a?.address || '')) === address);
+          const legacyMatches = legacyAddress && legacyAddress === address;
+
+          if (!addressExists && !legacyMatches) {
+            // Electron currently persists legacy customer.address via update; HTTP can also accept this field.
+            try {
+              await customerAPI.update(match.id, { address });
+            } catch (updateErr) {
+              // If update fails, ignore; order can still proceed.
+            }
+          }
+        }
+
+        // Also update non-identity fields (backup/notes/maps) if provided
+        const updateData = {};
+        if (backup) updateData.backupPhone = backup;
+        if (notes) updateData.notes = notes;
+        if (mapsLink) updateData.googleLink = mapsLink;
+        if (Object.keys(updateData).length > 0) {
+          try {
+            await customerAPI.update(match.id, updateData);
+          } catch (e) {}
+        }
+
+        return match.id;
+      }
+
+      // Not found by (name+phone) => create a NEW customer
+      const createPayload = {
+        phone,
+        name,
+        backupPhone: backup || undefined,
+        address: hasAddress ? address : undefined,
+        notes: notes || undefined,
+        googleLink: mapsLink || undefined,
+        googleMapsLink: mapsLink || undefined,
+      };
+
+      const createRes = await customerAPI.create(createPayload);
+      const created = createRes.data?.data || createRes.data;
+      const createdId = created?.id;
+      if (!createdId) {
+        throw new Error('Customer create failed');
+      }
+
+      // If Electron create didn't persist google_link, update it
+      if (mapsLink) {
+        try {
+          await customerAPI.update(createdId, { googleLink: mapsLink });
+        } catch (e) {}
+      }
+
+      return createdId;
+    } catch (err) {
+      console.error('Failed to ensure delivery customer:', err);
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message;
       throw new Error(errorMsg || 'Unable to process customer information');
     }
@@ -815,13 +1426,20 @@ const OrderSystem = () => {
           ordersAPI.getOrderItems(orderMeta.id)
         ]);
 
-        orderDetails = orderRes.data.data || {};
-        itemDetails = (itemsRes.data.data || []).map(item => ({
+        orderDetails = orderRes.data?.data ?? orderRes.data ?? {};
+        itemDetails = (itemsRes.data?.data ?? itemsRes.data ?? []).map(item => ({
           id: item.menuItemId || item.menu_item_id,
           name: item.itemName || item.name || item.item_name,
           price: Number(item.price) || 0,
           quantity: item.quantity || 1
         }));
+      }
+
+      if (!orderDetails || !orderDetails.id) {
+        setEditLoadError('Order not found.');
+        setEditingOrder(null);
+        setEditLoading(false);
+        return;
       }
 
       setCarts(prevCarts =>
@@ -896,11 +1514,19 @@ const OrderSystem = () => {
     );
   };
 
+  const getNextAvailableCartId = useCallback((existingCarts) => {
+    const used = new Set((existingCarts || []).map(c => c.id));
+    let id = 1;
+    while (used.has(id)) id += 1;
+    return id;
+  }, []);
+
   const addNewCart = () => {
-    const newCart = createCartTemplate(nextCartId, `Cart ${nextCartId}`);
+    const id = getNextAvailableCartId(carts);
+    const newCart = createCartTemplate(id, `Cart ${id}`);
     setCarts([...carts, newCart]);
-    setActiveCartId(nextCartId);
-    setNextCartId(nextCartId + 1);
+    setActiveCartId(id);
+    setNextCartId(getNextAvailableCartId([...carts, newCart]));
   };
 
   const removeCart = (cartId) => {
@@ -912,6 +1538,7 @@ const OrderSystem = () => {
 
     const newCarts = carts.filter(c => c.id !== cartId);
     setCarts(newCarts);
+    setNextCartId(getNextAvailableCartId(newCarts));
 
     if (cartId === activeCartId) {
       setActiveCartId(newCarts[0].id);
@@ -923,7 +1550,49 @@ const OrderSystem = () => {
   };
 
   useEffect(() => {
-    fetchMenuItems();
+    let cancelled = false;
+
+    const run = async () => {
+      const hadSnapshot = (lastMenuItemsSnapshot?.length ?? 0) > 0;
+
+      if (!hadSnapshot) {
+        const cached = await getCachedMenuItems();
+        if (cancelled) return;
+        if (cached.length > 0) {
+          lastMenuItemsSnapshot = cached;
+          setMenuItems(cached);
+          setMenuInitialLoading(false);
+        }
+      } else {
+        setMenuInitialLoading(false);
+      }
+
+      try {
+        const response = await menuItemsAPI.getAll();
+        if (cancelled) return;
+        const items = Array.isArray(response.data) ? response.data : (response.data?.data || []);
+        lastMenuItemsSnapshot = items;
+        setMenuItems(items);
+        await cacheMenuItems(items);
+      } catch (error) {
+        console.error('Error fetching menu items:', error);
+        if (cancelled) return;
+        const cached = await getCachedMenuItems();
+        if (cached.length > 0) {
+          lastMenuItemsSnapshot = cached;
+          setMenuItems(cached);
+        }
+      } finally {
+        if (!cancelled) {
+          setMenuInitialLoading(false);
+        }
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -947,32 +1616,6 @@ const OrderSystem = () => {
       setSearchParams({});
     }
   }, [searchParams, editingOrder, editLoading, loadOrderForEditing, setSearchParams]);
-
-  const fetchMenuItems = async () => {
-    try {
-      if (isOnline()) {
-        const response = await menuItemsAPI.getAll();
-        const items = response.data.data || response.data || [];
-        setMenuItems(items);
-        await cacheMenuItems(items);
-      } else {
-        const cached = await getCachedMenuItems();
-        if (cached.length > 0) {
-          setMenuItems(cached);
-          console.log('Loaded menu items from cache');
-        } else {
-          console.warn('No cached menu items available');
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching menu items:', error);
-      const cached = await getCachedMenuItems();
-      if (cached.length > 0) {
-        setMenuItems(cached);
-        console.log('Loaded menu items from cache after API error');
-      }
-    }
-  };
 
   const addToCart = useCallback((item) => {
     setCarts(prevCarts =>
@@ -1091,6 +1734,10 @@ const OrderSystem = () => {
 
     setCheckoutError('');
 
+    if (checkoutSubmittingRef.current) return;
+    checkoutSubmittingRef.current = true;
+    setCheckoutSubmitting(true);
+
     try {
       const subtotal = subtotalAmount; // Use memoized value
       const deliveryChargeValue = deliveryFee; // Use memoized value
@@ -1140,15 +1787,15 @@ const OrderSystem = () => {
           paymentStatus: paymentStatus,
           ...(isDelivery && {
             customerId: customerId,
-            deliveryAddress: deliveryAddress.trim(),
-            deliveryNotes: deliveryNotes.trim() || undefined,
-            googleMapsLink: googleMapsLink.trim() || undefined,
+            deliveryAddress: typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '',
+            deliveryNotes: typeof deliveryNotes === 'string' ? deliveryNotes.trim() : undefined,
+            googleMapsLink: typeof googleMapsLink === 'string' ? googleMapsLink.trim() : undefined,
             deliveryCharge: deliveryChargeValue
           }),
           ...(!isDelivery && {
             tableNumber: tableNumber || undefined
           }),
-          specialInstructions: specialInstructions.trim() || undefined,
+          specialInstructions: typeof specialInstructions === 'string' ? specialInstructions.trim() : undefined,
           discountPercent: discountPercent || 0
         };
 
@@ -1184,7 +1831,7 @@ const OrderSystem = () => {
           try {
             const response = await ordersAPI.update(editingOrder.id, updateData);
             orderNumber = response.data.data?.orderNumber || response.data.data?.order_number;
-            showSuccess(`Order #${orderNumber || editingOrder.id} updated successfully!`);
+            showSuccess(`Order has been updated successfully!`);
           } catch (error) {
             console.error('Error updating order:', error);
             // If API fails, try to save offline
@@ -1227,15 +1874,15 @@ const OrderSystem = () => {
           paymentStatus: paymentStatus,
           ...(isDelivery && {
             customerId: customerId,
-            deliveryAddress: deliveryAddress.trim(),
-            deliveryNotes: deliveryNotes.trim() || undefined,
-            googleMapsLink: googleMapsLink.trim() || undefined,
+            deliveryAddress: typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '',
+            deliveryNotes: typeof deliveryNotes === 'string' ? deliveryNotes.trim() : undefined,
+            googleMapsLink: typeof googleMapsLink === 'string' ? googleMapsLink.trim() : undefined,
             deliveryCharge: deliveryChargeValue
           }),
           ...(!isDelivery && {
             tableNumber: tableNumber || undefined
           }),
-          specialInstructions: specialInstructions.trim() || undefined,
+          specialInstructions: typeof specialInstructions === 'string' ? specialInstructions.trim() : undefined,
           discountPercent: discountPercent || 0
         };
 
@@ -1252,10 +1899,10 @@ const OrderSystem = () => {
                   ? (orderData.tableNumber.trim() !== '' ? orderData.tableNumber : undefined)
                   : String(orderData.tableNumber))
                 : undefined,
-              deliveryAddress: orderData.deliveryAddress && orderData.deliveryAddress.trim() !== '' ? orderData.deliveryAddress : undefined,
-              deliveryNotes: orderData.deliveryNotes && orderData.deliveryNotes.trim() !== '' ? orderData.deliveryNotes : undefined,
-              googleMapsLink: orderData.googleMapsLink && orderData.googleMapsLink.trim() !== '' ? orderData.googleMapsLink : undefined,
-              specialInstructions: orderData.specialInstructions && orderData.specialInstructions.trim() !== '' ? orderData.specialInstructions : undefined,
+              deliveryAddress: orderData.deliveryAddress && typeof orderData.deliveryAddress === 'string' && orderData.deliveryAddress.trim() !== '' ? orderData.deliveryAddress : undefined,
+              deliveryNotes: orderData.deliveryNotes && typeof orderData.deliveryNotes === 'string' && orderData.deliveryNotes.trim() !== '' ? orderData.deliveryNotes : undefined,
+              googleMapsLink: orderData.googleMapsLink && typeof orderData.googleMapsLink === 'string' && orderData.googleMapsLink.trim() !== '' ? orderData.googleMapsLink : undefined,
+              specialInstructions: orderData.specialInstructions && typeof orderData.specialInstructions === 'string' && orderData.specialInstructions.trim() !== '' ? orderData.specialInstructions : undefined,
             };
 
             console.log('Creating order with cleaned data:', cleanedOrderData);
@@ -1268,6 +1915,59 @@ const OrderSystem = () => {
             }
 
             showSuccess(`Order #${orderNumber || orderId} created successfully!`);
+
+                // Update customer with Google Maps link and stats if delivery order
+            if (isDelivery && customerId) {
+              try {
+                // Update customer's google_link field if provided
+                const safeGoogleMapsLink = typeof googleMapsLink === 'string' ? googleMapsLink.trim() : '';
+                if (safeGoogleMapsLink) {
+                  try {
+                    await customerAPI.update(customerId, {
+                      googleLink: safeGoogleMapsLink
+                    });
+                  } catch (updateErr) {
+                    console.warn('Failed to update customer google_link:', updateErr);
+                  }
+                }
+
+                // Update customer address with Google Maps link if provided
+                const customerResponse = await customerAPI.getById(customerId);
+                const customer = customerResponse.data?.data || customerResponse.data;
+                const safeDeliveryAddress = typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '';
+                if (customer && customer.addresses && customer.addresses.length > 0) {
+                  // Find the address that matches the delivery address
+                  const matchingAddress = customer.addresses.find(addr => 
+                    addr.address && addr.address.trim().toLowerCase() === safeDeliveryAddress.toLowerCase()
+                  );
+                  
+                  if (matchingAddress && (!matchingAddress.googleMapsLink || !matchingAddress.google_maps_link)) {
+                    // Update the address with the Google Maps link
+                    try {
+                      await customerAPI.updateAddress(matchingAddress.id, {
+                        googleMapsLink: safeGoogleMapsLink
+                      });
+                    } catch (updateErr) {
+                      console.warn('Failed to update customer address with Google Maps link:', updateErr);
+                    }
+                  } else if (!matchingAddress && safeDeliveryAddress) {
+                    // Create a new address with the Google Maps link
+                    try {
+                      await customerAPI.createAddress(customerId, {
+                        address: safeDeliveryAddress,
+                        googleMapsLink: safeGoogleMapsLink,
+                        isDefault: false
+                      });
+                    } catch (createErr) {
+                      console.warn('Failed to create customer address with Google Maps link:', createErr);
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn('Failed to update customer details:', err);
+                // Don't fail the order creation if this fails
+              }
+            }
 
             // Dispatch event to refresh badges immediately
             window.dispatchEvent(new CustomEvent('orderCreated', {
@@ -1295,7 +1995,7 @@ const OrderSystem = () => {
               orderId = savedOrder.id;
               orderNumber = null;
               isOffline = true;
-              showInfo('Order saved offline. It will sync when you are back online.');
+              // showInfo('Order saved offline. It will sync when you are back online.');
 
               // Reserve table locally for offline order
               if (!isDelivery && reserveTableRef.current) {
@@ -1341,7 +2041,7 @@ const OrderSystem = () => {
           orderId = savedOrder.id;
           orderNumber = null;
           isOffline = true;
-          showInfo('Order saved offline. It will sync when you are back online.');
+          // showInfo('Order saved offline. It will sync when you are back online.');
 
           // Reserve table locally for offline order
           if (!isDelivery && reserveTableRef.current) {
@@ -1380,13 +2080,13 @@ const OrderSystem = () => {
         payment_method: paymentMethod,
         payment_status: paymentStatus,
         cashier_name: 'Cashier',
-        special_instructions: specialInstructions,
+        special_instructions: typeof specialInstructions === 'string' ? specialInstructions : '',
         offline: isOffline,
         order_type: orderType,
-        customer_name: isDelivery ? deliveryName.trim() : null,
-        customer_phone: isDelivery ? deliveryPhone.trim() : null,
-        customer_address: isDelivery ? deliveryAddress : null,
-        delivery_notes: isDelivery ? deliveryNotes : '',
+        customer_name: isDelivery ? (typeof deliveryName === 'string' ? deliveryName.trim() : '') : null,
+        customer_phone: isDelivery ? (typeof deliveryPhone === 'string' ? deliveryPhone.trim() : '') : null,
+        customer_address: isDelivery ? (typeof deliveryAddress === 'string' ? deliveryAddress : '') : null,
+        delivery_notes: isDelivery ? (typeof deliveryNotes === 'string' ? deliveryNotes : '') : '',
         customer: isDelivery && selectedCustomer ? selectedCustomer : null, // Include customer object for notes fallback
         created_at: new Date().toISOString()
       };
@@ -1416,6 +2116,7 @@ const OrderSystem = () => {
             : c
         )
       );
+      clearPersistedCartState();
 
       // If editing, clear editing state
       if (editingOrder) {
@@ -1434,6 +2135,9 @@ const OrderSystem = () => {
       console.error('Error during checkout:', error);
       showError(error.formattedMessage || error.message || 'Error during checkout. Please try again.');
       setCheckoutError(error.formattedMessage || 'An unexpected error occurred. Please try again.');
+    } finally {
+      checkoutSubmittingRef.current = false;
+      setCheckoutSubmitting(false);
     }
   };
 
@@ -1455,14 +2159,30 @@ const OrderSystem = () => {
 
   // Memoize filtered items to avoid recalculating on every render
   const filteredItems = useMemo(() => {
-    return menuItems.filter(item => {
-      const isAvailable = item.available === 1 || item.available === true;
+    // Don't filter by availability - show all items (available and unavailable)
+    // Only filter by category and search term
+    const filtered = menuItems.filter(item => {
       const matchesCategory = selectedCategory ? item.category?.name === selectedCategory : true;
       const matchesSearch = debouncedSearchTerm
         ? item.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
         : true;
-      return isAvailable && matchesCategory && matchesSearch;
+      return matchesCategory && matchesSearch;
     });
+    
+    // Log filtering for debugging
+    if (menuItems.length > 0) {
+      console.log('🍽️ [OrderSystem] Filtering items:', {
+        totalItems: menuItems.length,
+        selectedCategory: selectedCategory || 'All',
+        searchTerm: debouncedSearchTerm || 'None',
+        filteredCount: filtered.length,
+        availableItems: menuItems.filter(i => i.available === 1 || i.available === true).length,
+        unavailableItems: menuItems.filter(i => !(i.available === 1 || i.available === true)).length,
+        categories: [...new Set(menuItems.map(i => i.category?.name).filter(Boolean))]
+      });
+    }
+    
+    return filtered;
   }, [menuItems, selectedCategory, debouncedSearchTerm]);
 
   // Memoize categories
@@ -1491,9 +2211,9 @@ const OrderSystem = () => {
   }, [subtotalAmount, discountAmount, deliveryFee]);
 
   const deliveryFormComplete = !isDelivery || (
-    deliveryName.trim() &&
+    (typeof deliveryName === 'string' ? deliveryName.trim() : '') &&
     phoneIsValid(deliveryPhone) &&
-    deliveryAddress.trim()
+    (typeof deliveryAddress === 'string' ? deliveryAddress.trim() : '')
   );
 
   // Check if selected table is occupied (for dine-in orders)
@@ -1523,10 +2243,11 @@ const OrderSystem = () => {
   }, [isDelivery, tableNumber, occupiedTables, editingOrder]);
 
   const checkoutButtonLabel = editingOrder
-    ? (isDelivery ? '💾 Update Delivery Order' : '💾 Update Order')
-    : (isDelivery ? '🚚 Create Delivery Order' : '🍽️ Create Dine-In Order');
+    ? (isDelivery ? <><FaSave style={{ marginRight: '0.25rem' }} /> Update Delivery Order</> : <><FaSave style={{ marginRight: '0.25rem' }} /> Update Order</>)
+    : (isDelivery ? <><FaTruck style={{ marginRight: '0.25rem' }} /> Create Delivery Order</> : <><FaUtensils style={{ marginRight: '0.25rem' }} /> Create Dine-In Order</>);
 
-  const canSubmitOrder = cart.length > 0 && deliveryFormComplete && !editLoading && !isSelectedTableOccupied;
+  const canSubmitOrderBase = cart.length > 0 && deliveryFormComplete && !editLoading && !isSelectedTableOccupied;
+  const canSubmitOrder = canSubmitOrderBase && !checkoutSubmitting;
 
   useEffect(() => {
     const handleCtrlN = () => {
@@ -1558,6 +2279,15 @@ const OrderSystem = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canSubmitOrder, editingOrder]);
 
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (updateCustomerDebounceRef.current) {
+        clearTimeout(updateCustomerDebounceRef.current);
+      }
+    };
+  }, []);
+
 
   return (
     <>
@@ -1565,7 +2295,7 @@ const OrderSystem = () => {
 
       <div style={{
         position: 'fixed',
-        top: '70px',
+        top: '110px',
         left: 0,
         right: 0,
         bottom: 0,
@@ -1594,7 +2324,7 @@ const OrderSystem = () => {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="🔍 Search menu items..."
+                placeholder="Search menu items..."
                 style={{
                   width: '100%',
                   padding: '1rem 1.5rem',
@@ -1621,7 +2351,8 @@ const OrderSystem = () => {
                 onClick={() => setSelectedCategory('')}
                 style={{
                   padding: '0.6rem 1.2rem',
-                  border: selectedCategory === '' ? '3px solid var(--color-primary)' : '2px solid var(--color-border)',
+                  border: '3px solid',
+                  borderColor: selectedCategory === '' ? 'var(--color-primary)' : 'var(--color-border)',
                   borderRadius: '25px',
                   background: selectedCategory === '' ? 'var(--gradient-primary)' : 'white',
                   color: selectedCategory === '' ? 'white' : 'var(--color-text)',
@@ -1640,7 +2371,8 @@ const OrderSystem = () => {
                   onClick={() => setSelectedCategory(category)}
                   style={{
                     padding: '0.6rem 1.2rem',
-                    border: selectedCategory === category ? '3px solid var(--color-primary)' : '2px solid var(--color-border)',
+                    border: '3px solid',
+                    borderColor: selectedCategory === category ? 'var(--color-primary)' : 'var(--color-border)',
                     borderRadius: '25px',
                     background: selectedCategory === category ? 'var(--gradient-primary)' : 'white',
                     color: selectedCategory === category ? 'white' : 'var(--color-text)',
@@ -1660,6 +2392,7 @@ const OrderSystem = () => {
           {/* Menu Items Grid */}
           <div style={{
             flex: 1,
+            position: 'relative',
             overflowY: 'auto',
             padding: '1rem',
             display: 'grid',
@@ -1667,14 +2400,28 @@ const OrderSystem = () => {
             gap: '1rem',
             alignContent: 'start'
           }}>
-            {filteredItems.length === 0 ? (
+            {menuInitialLoading && menuItems.length === 0 ? (
+              <div style={{
+                gridColumn: '1 / -1',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '3rem',
+                gap: '1rem',
+                color: '#6c757d'
+              }}>
+                <Spinner size="lg" />
+                <div style={{ fontSize: '1.05rem', fontWeight: 600 }}>Loading menu…</div>
+              </div>
+            ) : filteredItems.length === 0 ? (
               <div style={{
                 gridColumn: '1 / -1',
                 textAlign: 'center',
                 padding: '3rem',
                 color: '#6c757d'
               }}>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
+                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}><FaSearch /></div>
                 <div style={{ fontSize: '1.2rem', fontWeight: '600' }}>
                   {searchTerm ? 'No items found matching your search' : 'No available items in this category'}
                 </div>
@@ -1692,7 +2439,11 @@ const OrderSystem = () => {
               filteredItems.map(item => (
                 <div
                   key={item.id}
-                  onClick={() => addToCart(item)}
+                  onClick={() => {
+                    setSelectedMenuItem(item);
+                    setSelectedItemImageIndex(0);
+                    setIsItemModalOpen(true);
+                  }}
                   style={{
                     background: 'white',
                     borderRadius: '12px',
@@ -1734,7 +2485,7 @@ const OrderSystem = () => {
                   }}>
                     {item.imageUrl ? (
                       <img
-                        src={item.imageUrl?.startsWith('http') ? item.imageUrl : `${API_BASE_URL}${item.imageUrl}`}
+                        src={item.imageUrl?.startsWith('http') ? item.imageUrl : (API_BASE_URL !== 'IPC' ? `${API_BASE_URL}${item.imageUrl}` : item.imageUrl)}
                         alt={item.name}
                         style={{
                           width: '100%',
@@ -1744,7 +2495,7 @@ const OrderSystem = () => {
                         }}
                         onError={(e) => {
                           e.target.style.display = 'none';
-                          const emoji = (item.name?.trim()?.charAt(0)) || '🍽️';
+                          const emoji = (item.name?.trim()?.charAt(0)) || '';
                           e.target.parentElement.innerHTML = `
                   <div style="
                     width: 100%;
@@ -1861,10 +2612,10 @@ const OrderSystem = () => {
 
                   {/* Price and Add Button */}
                   <div style={{
+                    marginTop: 'auto',
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginTop: 'auto'
+                    flexDirection: 'column',
+                    gap: '0.5rem'
                   }}>
                     <div style={{
                       fontSize: '1.1rem',
@@ -1874,33 +2625,38 @@ const OrderSystem = () => {
                       PKR {parseFloat(item.price).toFixed(2)}
                     </div>
                     <button
+                      disabled={!(item.available === 1 || item.available === true)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        addToCart(item);
+                        if (item.available === 1 || item.available === true) addToCart(item);
                       }}
                       style={{
-                        background: 'var(--gradient-primary)',
+                        background: (item.available === 1 || item.available === true) ? 'var(--gradient-primary)' : '#ccc',
                         color: 'white',
                         border: 'none',
-                        borderRadius: '6px',
-                        padding: '0.4rem 0.8rem',
-                        fontSize: '0.8rem',
+                        borderRadius: '8px',
+                        padding: '0.6rem 0.8rem',
+                        fontSize: '0.9rem',
                         fontWeight: '600',
-                        cursor: 'pointer',
+                        cursor: (item.available === 1 || item.available === true) ? 'pointer' : 'not-allowed',
+                        opacity: (item.available === 1 || item.available === true) ? 1 : 0.7,
                         transition: 'all 0.2s ease',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '0.25rem'
+                        justifyContent: 'center',
+                        gap: '0.35rem',
+                        width: '100%',
+                        marginTop: '0.15rem'
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = 'scale(1.05)';
+                        if (item.available === 1 || item.available === true) e.currentTarget.style.transform = 'scale(1.05)';
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.transform = 'scale(1)';
                       }}
                     >
-                      <span>Add</span>
-                      <span style={{ fontSize: '0.9rem' }}>+</span>
+                      <span>{(item.available === 1 || item.available === true) ? 'Add to Cart' : 'Unavailable'}</span>
+                      {(item.available === 1 || item.available === true) && <span style={{ fontSize: '0.9rem' }}>+</span>}
                     </button>
                   </div>
                 </div>
@@ -1917,159 +2673,203 @@ const OrderSystem = () => {
           boxShadow: '-4px 0 24px rgba(0,0,0,0.1)'
         }}>
           {/* Cart Tabs */}
-          <div style={{
-            background: 'var(--gradient-primary)',
-            display: 'flex',
-            alignItems: 'flex-end',
-            overflowX: 'auto',
-            overflowY: 'hidden',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            padding: '0.5rem 0.5rem 0 0.5rem',
-            gap: '0.5rem',
-            minHeight: '56px',
-            maxHeight: '56px',
-            scrollbarWidth: 'none',
-            msOverflowStyle: 'none'
-          }}
-            className="cart-tabs-container"
-          >
-            {carts.map(c => (
-              <div
-                key={c.id}
-                onClick={() => switchToCart(c.id)}
+          <div style={{ position: 'relative' }}>
+            <div
+              ref={cartTabsScrollRef}
+              onScroll={updateCartTabsRightArrow}
+              style={{
+                background: 'var(--gradient-primary)',
+                display: 'flex',
+                alignItems: 'flex-end',
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                padding: '0.5rem 56px 0 0.5rem',
+                gap: '0.5rem',
+                minHeight: '56px',
+                maxHeight: '56px',
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none'
+              }}
+              className="cart-tabs-container"
+            >
+              {carts.map(c => (
+                <div
+                  key={c.id}
+                  onClick={() => switchToCart(c.id)}
+                  style={{
+                    background: c.id === activeCartId ? 'white' : 'rgba(255,255,255,0.2)',
+                    color: c.id === activeCartId ? 'var(--color-primary)' : 'white',
+                    padding: '0.625rem 1rem',
+                    borderRadius: '8px 8px 0 0',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem',
+                    fontSize: '0.9rem',
+                    fontWeight: '600',
+                    transition: 'all 0.2s ease',
+                    minWidth: '110px',
+                    maxWidth: '150px',
+                    height: '48px',
+                    position: 'relative',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                    boxSizing: 'border-box'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (c.id !== activeCartId) {
+                      e.currentTarget.style.background = 'rgba(255,255,255,0.3)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (c.id !== activeCartId) {
+                      e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
+                    }
+                  }}
+                >
+                  <span style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.375rem',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    flex: 1,
+                    minWidth: 0
+                  }}>
+                    <span style={{ flexShrink: 0 }}><FaShoppingCart /></span>
+                    <span style={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>{c.name}</span>
+                  </span>
+                  {c.items.length > 0 && (
+                    <span style={{
+                      background: c.id === activeCartId ? 'var(--color-primary)' : 'rgba(255,255,255,0.3)',
+                      color: 'white',
+                      padding: '0.15rem 0.5rem',
+                      borderRadius: '12px',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      flexShrink: 0,
+                      lineHeight: '1.2'
+                    }}>
+                      {c.items.length}
+                    </span>
+                  )}
+                  {carts.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeCart(c.id);
+                      }}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: c.id === activeCartId ? '#dc3545' : 'rgba(255,255,255,0.8)',
+                        cursor: 'pointer',
+                        fontSize: '1.1rem',
+                        padding: '0.125rem 0.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginLeft: '0.25rem',
+                        flexShrink: 0,
+                        width: '20px',
+                        height: '20px',
+                        lineHeight: '1',
+                        borderRadius: '4px',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = c.id === activeCartId ? 'rgba(220, 53, 69, 0.1)' : 'rgba(255,255,255,0.2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent';
+                      }}
+                      title="Close cart"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addNewCart}
                 style={{
-                  background: c.id === activeCartId ? 'white' : 'rgba(255,255,255,0.2)',
-                  color: c.id === activeCartId ? 'var(--color-primary)' : 'white',
-                  padding: '0.625rem 1rem',
+                  background: 'rgba(255,255,255,0.2)',
+                  color: 'white',
+                  border: '2px dashed rgba(255,255,255,0.5)',
                   borderRadius: '8px 8px 0 0',
+                  padding: '0.625rem 1rem',
                   cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.5rem',
                   fontSize: '0.9rem',
                   fontWeight: '600',
                   transition: 'all 0.2s ease',
-                  minWidth: '110px',
-                  maxWidth: '150px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.375rem',
                   height: '48px',
-                  position: 'relative',
-                  whiteSpace: 'nowrap',
+                  minWidth: '110px',
                   flexShrink: 0,
                   boxSizing: 'border-box'
                 }}
                 onMouseEnter={(e) => {
-                  if (c.id !== activeCartId) {
-                    e.currentTarget.style.background = 'rgba(255,255,255,0.3)';
-                  }
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.3)';
+                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.8)';
                 }}
                 onMouseLeave={(e) => {
-                  if (c.id !== activeCartId) {
-                    e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
-                  }
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
+                  e.currentTarget.style.borderColor = 'rgba(255,255,255,0.5)';
                 }}
+                title="Add new cart"
               >
-                <span style={{
+                <span>+</span>
+                <span>New</span>
+              </button>
+            </div>
+
+            {showCartTabsRightArrow && (
+              <button
+                type="button"
+                onClick={scrollCartTabsRight}
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  right: '0.25rem',
+                  transform: 'translateY(-50%)',
+                  zIndex: 2,
+                  background: 'rgba(255,255,255,0.35)',
+                  border: 'none',
+                  color: 'white',
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '999px',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.375rem',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  flex: 1,
-                  minWidth: 0
-                }}>
-                  <span style={{ flexShrink: 0 }}>🛒</span>
-                  <span style={{
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}>{c.name}</span>
-                </span>
-                {c.items.length > 0 && (
-                  <span style={{
-                    background: c.id === activeCartId ? 'var(--color-primary)' : 'rgba(255,255,255,0.3)',
-                    color: 'white',
-                    padding: '0.15rem 0.5rem',
-                    borderRadius: '12px',
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold',
-                    flexShrink: 0,
-                    lineHeight: '1.2'
-                  }}>
-                    {c.items.length}
-                  </span>
-                )}
-                {carts.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeCart(c.id);
-                    }}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: c.id === activeCartId ? '#dc3545' : 'rgba(255,255,255,0.8)',
-                      cursor: 'pointer',
-                      fontSize: '1.1rem',
-                      padding: '0.125rem 0.25rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginLeft: '0.25rem',
-                      flexShrink: 0,
-                      width: '20px',
-                      height: '20px',
-                      lineHeight: '1',
-                      borderRadius: '4px',
-                      transition: 'all 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = c.id === activeCartId ? 'rgba(220, 53, 69, 0.1)' : 'rgba(255,255,255,0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                    }}
-                    title="Close cart"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
-            <button
-              onClick={addNewCart}
-              style={{
-                background: 'rgba(255,255,255,0.2)',
-                color: 'white',
-                border: '2px dashed rgba(255,255,255,0.5)',
-                borderRadius: '8px 8px 0 0',
-                padding: '0.625rem 1rem',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                fontWeight: '600',
-                transition: 'all 0.2s ease',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '0.375rem',
-                height: '48px',
-                minWidth: '110px',
-                flexShrink: 0,
-                boxSizing: 'border-box'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.3)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.8)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
-                e.currentTarget.style.borderColor = 'rgba(255,255,255,0.5)';
-              }}
-              title="Add new cart"
-            >
-              <span>+</span>
-              <span>New</span>
-            </button>
+                  justifyContent: 'center',
+                  transition: 'all 0.2s ease',
+                  padding: 0
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.55)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255,255,255,0.35)';
+                }}
+                aria-label="Scroll carts to the right"
+                title="Scroll carts to the right"
+              >
+                <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>›</span>
+              </button>
+            )}
           </div>
 
           <div style={{
@@ -2131,9 +2931,13 @@ const OrderSystem = () => {
                   background: '#e7f5ff',
                   color: '#0b7285',
                   fontWeight: 600,
-                  fontSize: '0.9rem'
+                  fontSize: '0.9rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem'
                 }}>
-                  Loading order details...
+                  <Spinner size="sm" />
+                  <div>Loading order details...</div>
                 </div>
               )}
               {editingOrder && !editLoading && (
@@ -2355,7 +3159,7 @@ const OrderSystem = () => {
                         color: '#7c2d12',
                         fontWeight: '600'
                       }}>
-                        ⚠️ This table has a pending order
+                        <FaExclamationTriangle style={{ marginRight: '0.25rem' }} /> This table has a pending order
                       </div>
                     )}
                 </div>
@@ -2372,11 +3176,64 @@ const OrderSystem = () => {
                 flexDirection: 'column',
                 gap: '1rem'
               }}>
-                <div>
-                  <h3 style={{ margin: 0 }}>Delivery Details</h3>
-                  <p style={{ margin: 0, color: '#6c757d', fontSize: '0.9rem' }}>
-                    Capture customer info directly on the ticket.
-                  </p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                  <div>
+                    <h3 style={{ margin: 0 }}>Delivery Details</h3>
+                    <p style={{ margin: 0, color: '#6c757d', fontSize: '0.9rem' }}>
+                      Capture customer info directly on the ticket.
+                    </p>
+                  </div>
+                  <button
+                    disabled={!deliveryFormComplete}
+                    onClick={() => {
+                      if (!deliveryFormComplete) return;
+                      const formattedText = `Full Name: ${deliveryName || 'N/A'}
+Phone: ${deliveryPhone || 'N/A'}
+Backup Phone: ${deliveryBackupPhone || 'N/A'}
+Address: ${deliveryAddress || 'N/A'}
+Notes / Instructions: ${deliveryNotes || 'N/A'}
+Google Maps Link: ${googleMapsLink || 'N/A'}
+Payment Status: ${deliveryPaymentType === 'cod' ? 'COD (Pending)' : 'Prepaid (Paid)'}
+Subtotal: PKR ${subtotalAmount.toFixed(0)}
+Delivery Charge: PKR ${deliveryFee.toFixed(0)}
+Total: PKR ${grandTotalAmount.toFixed(0)}`;
+                      navigator.clipboard.writeText(formattedText).then(() => {
+                        showSuccess('Delivery details copied to clipboard!');
+                      }).catch(() => {
+                        showError('Failed to copy to clipboard');
+                      });
+                    }}
+                    style={{
+                      background: deliveryFormComplete ? 'var(--gradient-primary)' : '#e9ecef',
+                      color: deliveryFormComplete ? 'white' : '#adb5bd',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      cursor: deliveryFormComplete ? 'pointer' : 'not-allowed',
+                      opacity: deliveryFormComplete ? 1 : 0.7,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      transition: 'all 0.2s',
+                      whiteSpace: 'nowrap'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!deliveryFormComplete) return;
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!deliveryFormComplete) return;
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title={deliveryFormComplete ? 'Copy all delivery details' : 'Fill required fields to enable copy'}
+                  >
+                    <span><FaClipboard /></span>
+                    <span>Copy</span>
+                  </button>
                 </div>
 
                 <div style={{
@@ -2384,22 +3241,123 @@ const OrderSystem = () => {
                   gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                   gap: '1rem'
                 }}>
-                  <label style={{ fontWeight: 600 }}>
-                    Full Name*
-                    <input
-                      type="text"
-                      value={deliveryName}
-                      onChange={(e) => handleDeliveryFieldChange('deliveryName', e.target.value)}
-                      placeholder="Customer name"
-                      style={{
-                        width: '100%',
-                        marginTop: '0.35rem',
-                        padding: '0.85rem',
-                        borderRadius: '10px',
-                        border: '2px solid #e2e8f0'
-                      }}
-                    />
-                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <label style={{ fontWeight: 600 }}>
+                      Full Name*
+                      <input
+                        type="text"
+                        value={deliveryName}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          handleNameChange(val);
+                        }}
+                        onFocus={() => {
+                          if (deliveryName.trim().length >= 1) {
+                            setShowNameSuggestions(true);
+                            // Trigger search if there's already text
+                            if (deliveryName.trim().length >= 1) {
+                              handleNameSearch(deliveryName);
+                            }
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Don't hide if clicking inside the suggestions dropdown
+                          const relatedTarget = e.relatedTarget || document.activeElement;
+                          const suggestionsContainer = e.currentTarget.parentElement?.querySelector('[data-name-suggestions]');
+                          if (suggestionsContainer && suggestionsContainer.contains(relatedTarget)) {
+                            return;
+                          }
+                          // Delay hiding suggestions to allow click
+                          setTimeout(() => setShowNameSuggestions(false), 200);
+                        }}
+                        placeholder="Start typing customer name..."
+                        style={{
+                          width: '100%',
+                          marginTop: '0.35rem',
+                          padding: '0.85rem',
+                          borderRadius: '10px',
+                          border: '2px solid #e2e8f0'
+                        }}
+                      />
+                    </label>
+                    {showNameSuggestions && nameSuggestions.length > 0 && (
+                      <div
+                        data-name-suggestions
+                        onMouseDown={(e) => {
+                          // Prevent blur event when clicking inside dropdown
+                          e.preventDefault();
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          marginTop: '0.25rem',
+                          background: 'white',
+                          border: '2px solid #e2e8f0',
+                          borderRadius: '8px',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          zIndex: 1000,
+                          maxHeight: '300px',
+                          overflowY: 'auto'
+                        }}
+                      >
+                        {nameSuggestions.map((customer) => (
+                          <div
+                            key={customer.id || customer.phone}
+                            onClick={() => {
+                              handleCustomerSelect(customer);
+                              setShowNameSuggestions(false);
+                            }}
+                            style={{
+                              padding: '0.75rem 1rem',
+                              cursor: 'pointer',
+                              borderBottom: '1px solid #f1f3f5',
+                              transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = '#f8f9fa';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = 'white';
+                            }}
+                          >
+                            <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>
+                              {customer.name || 'Unnamed Customer'}
+                            </div>
+                            <div style={{ fontSize: '0.85rem', color: '#6c757d' }}>
+                              {customer.phone}
+                              {customer.backupPhone || customer.backup_phone ? ` • ${customer.backupPhone || customer.backup_phone}` : ''}
+                            </div>
+                            {customer.address && (
+                              <div style={{ fontSize: '0.8rem', color: '#868e96', marginTop: '0.25rem' }}>
+                                {customer.address.slice(0, 60)}
+                                {customer.address.length > 60 ? '...' : ''}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {nameSearchLoading && (
+                      <div style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        marginTop: '0.25rem',
+                        padding: '0.5rem',
+                        background: 'white',
+                        border: '2px solid #e2e8f0',
+                        borderRadius: '8px',
+                        textAlign: 'center',
+                        fontSize: '0.85rem',
+                        color: '#6c757d'
+                      }}>
+                        Searching...
+                      </div>
+                    )}
+                  </div>
                   <div style={{ position: 'relative' }}>
                     <label style={{ fontWeight: 600 }}>
                       Phone*
@@ -2596,6 +3554,10 @@ const OrderSystem = () => {
                     <textarea
                       value={deliveryAddress}
                       onChange={(e) => handleDeliveryFieldChange('deliveryAddress', e.target.value)}
+                      onBlur={() => {
+                        // If user typed delivery info manually (no selection), auto-create the customer
+                        autoEnsureDeliveryCustomer();
+                      }}
                       placeholder="Select a customer first, or enter address manually..."
                       rows="3"
                       style={{
@@ -2617,7 +3579,11 @@ const OrderSystem = () => {
                   Notes / Instructions
                   <textarea
                     value={deliveryNotes}
-                    onChange={(e) => handleDeliveryFieldChange('deliveryNotes', e.target.value)}
+                    onChange={(e) => {
+                      const nextRaw = e.target.value ?? '';
+                      const next = String(nextRaw).slice(0, DELIVERY_NOTES_MAX_LENGTH);
+                      handleDeliveryFieldChange('deliveryNotes', next);
+                    }}
                     placeholder="Gate 2, call when outside, etc."
                     rows="3"
                     style={{
@@ -2625,10 +3591,68 @@ const OrderSystem = () => {
                       marginTop: '0.35rem',
                       padding: '0.85rem',
                       borderRadius: '10px',
-                      border: '2px solid #e2e8f0',
+                      border: (typeof deliveryNotes === 'string' && deliveryNotes.length > DELIVERY_NOTES_MAX_LENGTH) ? '2px solid #dc3545' : '2px solid #e2e8f0',
                       resize: 'vertical'
                     }}
                   />
+                  <small style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    marginTop: '0.25rem',
+                    color: (typeof deliveryNotes === 'string' && deliveryNotes.length > DELIVERY_NOTES_MAX_LENGTH) ? '#dc3545' : '#6c757d',
+                    fontSize: '0.85rem'
+                  }}>
+                    <span>
+                      {(typeof deliveryNotes === 'string' && deliveryNotes.length > DELIVERY_NOTES_MAX_LENGTH)
+                        ? `Notes are too long. Max ${DELIVERY_NOTES_MAX_LENGTH} characters.`
+                        : 'Optional. Keep it short for the rider.'}
+                    </span>
+                    <span style={{ marginLeft: '0.75rem', whiteSpace: 'nowrap' }}>
+                      {(typeof deliveryNotes === 'string' ? deliveryNotes.length : 0)}/{DELIVERY_NOTES_MAX_LENGTH}
+                    </span>
+                  </small>
+                </label>
+
+                  <label style={{ fontWeight: 600 }}>
+                  Google Maps Link
+                  <input
+                    type="url"
+                    value={googleMapsLink}
+                    onChange={(e) => {
+                      handleDeliveryFieldChange('googleMapsLink', e.target.value);
+                      // Also update customer's google_link immediately if customer is selected
+                      if (selectedCustomer && selectedCustomer.id) {
+                        // Clear previous debounce
+                        if (updateCustomerDebounceRef.current) {
+                          clearTimeout(updateCustomerDebounceRef.current);
+                        }
+                        // Update immediately for Google Maps link (shorter delay)
+                        updateCustomerDebounceRef.current = setTimeout(() => {
+                          updateCustomerData();
+                        }, 1000); // 1 second delay for Google Maps link
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const normalized = normalizeLikelyUrl(e.target.value);
+                      if (normalized !== e.target.value) {
+                        handleDeliveryFieldChange('googleMapsLink', normalized);
+                      }
+                    }}
+                    placeholder="https://maps.google.com/..."
+                    style={{
+                      width: '100%',
+                      marginTop: '0.35rem',
+                      padding: '0.85rem',
+                      borderRadius: '10px',
+                      border: (typeof googleMapsLink === 'string' && googleMapsLink.trim() && !isValidGoogleMapsLink(googleMapsLink)) ? '2px solid #dc3545' : '2px solid #e2e8f0',
+                      fontSize: '0.9rem'
+                    }}
+                  />
+                  <small style={{ display: 'block', marginTop: '0.25rem', color: '#6c757d', fontSize: '0.85rem' }}>
+                    {(typeof googleMapsLink === 'string' && googleMapsLink.trim() && !isValidGoogleMapsLink(googleMapsLink))
+                      ? 'Invalid link. Paste a Google Maps URL (e.g., maps.google.com, google.com/maps, maps.app.goo.gl).'
+                      : 'Paste the Google Maps link for the delivery address. This will be saved to the customer’s profile automatically.'}
+                  </small>
                 </label>
 
                 <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -2699,7 +3723,7 @@ const OrderSystem = () => {
             {cart.length === 0 ? (
               <div style={{ flex: 1, padding: '2rem' }}>
                 <EmptyState
-                  icon="🛒"
+                  icon={<FaShoppingCart />}
                   title="Cart is Empty"
                   message="Add items from the menu to start creating an order"
                 />
@@ -2899,7 +3923,7 @@ const OrderSystem = () => {
                       color: '#495057',
                       fontSize: '0.8rem'
                     }}>
-                      🏷️ Discount Percentage (%)
+                      <FaTag style={{ marginRight: '0.25rem' }} /> Discount Percentage (%)
                     </label>
                     <input
                       type="number"
@@ -2933,7 +3957,7 @@ const OrderSystem = () => {
                       color: '#495057',
                       fontSize: '0.8rem'
                     }}>
-                      📝 Special Instructions (Optional)
+                      <FaStickyNote style={{ marginRight: '0.25rem' }} /> Special Instructions (Optional)
                     </label>
                     <textarea
                       value={specialInstructions}
@@ -2961,7 +3985,7 @@ const OrderSystem = () => {
                       border: '2px solid #f59f00',
                       marginBottom: '1rem'
                     }}>
-                      <strong>💡 Dine-In Order</strong>
+                      <strong><FaLightbulb style={{ marginRight: '0.25rem' }} /> Dine-In Order</strong>
                       <p style={{ marginTop: '0.5rem', color: '#7c2d12', fontSize: '0.85rem' }}>
                         Payment will be collected when the customer is ready to pay. Mark as paid from the Dine-In Orders page.
                       </p>
@@ -3000,25 +4024,30 @@ const OrderSystem = () => {
 
                   {/* Checkout Button */}
                   <button
+                    type="button"
                     onClick={handleCheckout}
                     disabled={!canSubmitOrder}
+                    aria-busy={checkoutSubmitting}
                     title={isSelectedTableOccupied ? `Table #${tableNumber} is already reserved. Please select a different table.` : undefined}
                     style={{
                       width: '100%',
                       padding: '0.85rem',
                       border: 'none',
                       borderRadius: '10px',
-                      background: canSubmitOrder
+                      background: checkoutSubmitting
                         ? 'var(--gradient-primary)'
-                        : isSelectedTableOccupied
-                          ? '#ffc107'
-                          : 'var(--color-border)',
+                        : canSubmitOrderBase
+                          ? 'var(--gradient-primary)'
+                          : isSelectedTableOccupied
+                            ? '#ffc107'
+                            : 'var(--color-border)',
                       color: 'white',
                       fontSize: '1rem',
                       fontWeight: 'bold',
-                      cursor: canSubmitOrder ? 'pointer' : 'not-allowed',
+                      cursor: checkoutSubmitting ? 'wait' : canSubmitOrderBase ? 'pointer' : 'not-allowed',
                       transition: 'all 0.3s',
-                      boxShadow: canSubmitOrder ? 'var(--shadow-md)' : 'none',
+                      boxShadow: canSubmitOrderBase && !checkoutSubmitting ? 'var(--shadow-md)' : checkoutSubmitting ? 'var(--shadow-md)' : 'none',
+                      opacity: checkoutSubmitting ? 0.92 : 1,
                       minHeight: '44px',
                       display: 'flex',
                       alignItems: 'center',
@@ -3026,21 +4055,28 @@ const OrderSystem = () => {
                       gap: '0.5rem'
                     }}
                     onMouseEnter={(e) => {
-                      if (canSubmitOrder) {
+                      if (canSubmitOrderBase && !checkoutSubmitting) {
                         e.currentTarget.style.transform = 'translateY(-2px)';
                         e.currentTarget.style.boxShadow = 'var(--shadow-lg)';
                         e.currentTarget.style.background = 'var(--color-primary-dark)';
                       }
                     }}
                     onMouseLeave={(e) => {
-                      if (canSubmitOrder) {
+                      if (canSubmitOrderBase && !checkoutSubmitting) {
                         e.currentTarget.style.transform = 'translateY(0)';
                         e.currentTarget.style.boxShadow = 'var(--shadow-md)';
                         e.currentTarget.style.background = 'var(--gradient-primary)';
                       }
                     }}
                   >
-                    {checkoutButtonLabel}
+                    {checkoutSubmitting ? (
+                      <>
+                        <Spinner size="sm" />
+                        <span>Processing…</span>
+                      </>
+                    ) : (
+                      checkoutButtonLabel
+                    )}
                   </button>
                 </div>
               </>
@@ -3048,6 +4084,409 @@ const OrderSystem = () => {
           </div>
         </div>
       </div>
+
+      {/* Item Detail Modal */}
+      {isItemModalOpen && selectedMenuItem && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setIsItemModalOpen(false);
+            setSelectedMenuItem(null);
+            setSelectedItemImageIndex(0);
+          }}
+        >
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '16px',
+              maxWidth: '900px',
+              width: '95%',
+              height: '80vh',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'row',
+              overflow: 'hidden',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Left: Image / Slider */}
+            <div
+              style={{
+                flex: 1.1,
+                background: '#fff',
+                position: 'relative',
+                minHeight: 0,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {(() => {
+                const images = getItemImages(selectedMenuItem);
+                const hasImages = images.length > 0;
+                const currentImage = hasImages
+                  ? images[Math.max(0, Math.min(selectedItemImageIndex, images.length - 1))]
+                  : null;
+
+                const resolveImageUrl = (url) => {
+                  if (!url) return null;
+                  if (url.startsWith('http')) return url;
+                  return API_BASE_URL !== 'IPC' ? `${API_BASE_URL}${url}` : url;
+                };
+
+                return (
+                  <>
+                    <div
+                      style={{
+                        flex: 1,
+                        position: 'relative',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: '#fff',
+                      }}
+                    >
+                      {currentImage ? (
+                        <img
+                          src={resolveImageUrl(currentImage)}
+                          alt={selectedMenuItem.name}
+                          style={{
+                            maxWidth: '100%',
+                            maxHeight: '100%',
+                            objectFit: 'contain',
+                          }}
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background:
+                              'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            color: 'white',
+                            padding: '1.5rem',
+                            textAlign: 'center',
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: '3rem',
+                              fontWeight: 700,
+                              marginBottom: '0.5rem',
+                            }}
+                          >
+                            {getInitials(selectedMenuItem.name)}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '1rem',
+                              fontWeight: 500,
+                              opacity: 0.9,
+                              maxWidth: '90%',
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {selectedMenuItem.name}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Slider controls */}
+                      {hasImages && images.length > 1 && (
+                        <>
+                          <button
+                            onClick={() =>
+                              setSelectedItemImageIndex((prev) =>
+                                prev === 0 ? images.length - 1 : prev - 1
+                              )
+                            }
+                            style={{
+                              position: 'absolute',
+                              left: '10px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'rgba(0,0,0,0.6)',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '999px',
+                              width: '36px',
+                              height: '36px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.2rem',
+                            }}
+                          >
+                            ‹
+                          </button>
+                          <button
+                            onClick={() =>
+                              setSelectedItemImageIndex((prev) =>
+                                prev === images.length - 1 ? 0 : prev + 1
+                              )
+                            }
+                            style={{
+                              position: 'absolute',
+                              right: '10px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              background: 'rgba(0,0,0,0.6)',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '999px',
+                              width: '36px',
+                              height: '36px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '1.2rem',
+                            }}
+                          >
+                            ›
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Thumbnails */}
+                    {hasImages && images.length > 1 && (
+                      <div
+                        style={{
+                          padding: '0.5rem 0.75rem 0.75rem',
+                          display: 'flex',
+                          gap: '0.4rem',
+                          overflowX: 'auto',
+                          background: '#050505',
+                        }}
+                      >
+                        {images.map((img, index) => (
+                          <button
+                            key={`${img}-${index}`}
+                            onClick={() => setSelectedItemImageIndex(index)}
+                            style={{
+                              border:
+                                index === selectedItemImageIndex
+                                  ? '2px solid #f8f9fa'
+                                  : '2px solid transparent',
+                              padding: 0,
+                              borderRadius: '8px',
+                              overflow: 'hidden',
+                              cursor: 'pointer',
+                              background: 'transparent',
+                              minWidth: '64px',
+                              height: '48px',
+                            }}
+                          >
+                            <img
+                              src={resolveImageUrl(img)}
+                              alt=""
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                objectFit: 'cover',
+                              }}
+                              onError={(e) => {
+                                e.target.style.display = 'none';
+                              }}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Right: Details */}
+            <div
+              style={{
+                flex: 1,
+                padding: '1.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.75rem',
+                position: 'relative',
+                height: '100%',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+              }}
+            >
+              {/* Close button */}
+              <button
+                onClick={() => {
+                  setIsItemModalOpen(false);
+                  setSelectedMenuItem(null);
+                  setSelectedItemImageIndex(0);
+                }}
+                style={{
+                  position: 'sticky',
+                  top: '0.75rem',
+                  alignSelf: 'flex-end',
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#6c757d',
+                  zIndex: 1,
+                }}
+              >
+                ×
+              </button>
+
+              <div
+                style={{
+                  fontSize: '0.8rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  fontWeight: 600,
+                  color: 'var(--color-primary)',
+                }}
+              >
+                {selectedMenuItem.category?.name || 'Menu Item'}
+              </div>
+
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: '1.4rem',
+                  fontWeight: 700,
+                  color: '#212529',
+                }}
+              >
+                {selectedMenuItem.name}
+              </h2>
+
+              <div
+                style={{
+                  fontSize: '1.25rem',
+                  fontWeight: 700,
+                  color: 'var(--color-primary)',
+                }}
+              >
+                PKR {parseFloat(selectedMenuItem.price || 0).toFixed(2)}
+              </div>
+
+              {selectedMenuItem.description && (
+                <p
+                  style={{
+                    marginTop: '0.5rem',
+                    fontSize: '0.9rem',
+                    color: '#495057',
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {selectedMenuItem.description}
+                </p>
+              )}
+
+              {/* Extra info */}
+              <div
+                style={{
+                  marginTop: '0.5rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.35rem',
+                  fontSize: '0.85rem',
+                  color: '#6c757d',
+                }}
+              >
+                {selectedMenuItem.code && (
+                  <div>
+                    <strong style={{ color: '#495057' }}>Code:</strong>{' '}
+                    {selectedMenuItem.code}
+                  </div>
+                )}
+                {typeof selectedMenuItem.available !== 'undefined' && (
+                  <div>
+                    <strong style={{ color: '#495057' }}>Availability:</strong>{' '}
+                    <span
+                      style={{
+                        color:
+                          selectedMenuItem.available === 1 ||
+                          selectedMenuItem.available === true
+                            ? '#198754'
+                            : '#dc3545',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {selectedMenuItem.available === 1 ||
+                      selectedMenuItem.available === true
+                        ? 'Available'
+                        : 'Unavailable'}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Actions */}
+              <button
+                disabled={!(selectedMenuItem.available === 1 || selectedMenuItem.available === true)}
+                onClick={() => {
+                  if (selectedMenuItem.available === 1 || selectedMenuItem.available === true) {
+                    addToCart(selectedMenuItem);
+                    setIsItemModalOpen(false);
+                    setSelectedMenuItem(null);
+                    setSelectedItemImageIndex(0);
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.85rem 1rem',
+                  border: 'none',
+                  borderRadius: '12px',
+                  background: (selectedMenuItem.available === 1 || selectedMenuItem.available === true) ? 'var(--gradient-primary)' : '#ccc',
+                  color: 'white',
+                  fontSize: '1rem',
+                  fontWeight: 700,
+                  cursor: (selectedMenuItem.available === 1 || selectedMenuItem.available === true) ? 'pointer' : 'not-allowed',
+                  opacity: (selectedMenuItem.available === 1 || selectedMenuItem.available === true) ? 1 : 0.7,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem',
+                  boxShadow: 'var(--shadow-md)',
+                  marginTop: '0.75rem',
+                }}
+                onMouseEnter={(e) => {
+                  if (selectedMenuItem.available === 1 || selectedMenuItem.available === true) {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = 'var(--shadow-lg)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'var(--shadow-md)';
+                }}
+              >
+                <span>{(selectedMenuItem.available === 1 || selectedMenuItem.available === true) ? 'Add to Cart' : 'Unavailable'}</span>
+                {(selectedMenuItem.available === 1 || selectedMenuItem.available === true) && <span style={{ fontSize: '1.1rem' }}>+</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

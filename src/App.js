@@ -1,15 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { authAPI } from './services/api';
 import './App.css';
 import Login from './components/Login';
 import AdminPortal from './components/AdminPortal';
 import ManagerPortal from './components/ManagerPortal';
+import StaffPortal from './components/StaffPortal';
 import { ToastProvider } from './contexts/ToastContext';
 import { OfflineProvider } from './contexts/OfflineContext';
 import { ServerConnectionProvider } from './contexts/ServerConnectionContext';
 import { Spinner } from './components/LoadingSkeleton';
 import ServerConnectionManager from './components/ServerConnectionManager';
+import QuerySyncBridge from './components/QuerySyncBridge';
+import { queryClient } from './queryClient';
 import './utils/debugOffline'; // Enable debug functions
 
 function App() {
@@ -18,65 +23,88 @@ function App() {
 
   useEffect(() => {
     checkSession();
+    const timeout = setTimeout(() => {
+      console.warn('Session check timeout - showing login');
+      setLoading(false);
+    }, 10000);
+    return () => clearTimeout(timeout);
   }, []);
 
   const checkSession = async () => {
     try {
-      // First, try to get user from localStorage as backup
+      const token = localStorage.getItem('token');
       const storedUser = localStorage.getItem('user');
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser);
-          setUser(parsedUser);
-        } catch (e) {
-          console.error('Error parsing stored user:', e);
-          localStorage.removeItem('user');
-        }
+
+      if (!token) {
+        localStorage.removeItem('user');
+        setUser(null);
+        setLoading(false);
+        return;
       }
 
-      // Then verify with backend using the centralized API service
-      // This automatically adds the Authorization header
-      const response = await authAPI.getCurrentUser();
+      try {
+        const response = await authAPI.getCurrentUser();
 
-      if (response.data.success && response.data.data) {
-        // authAPI returns { success: true, data: user }
-        setUser(response.data.data);
-        // Store in localStorage for persistence
-        localStorage.setItem('user', JSON.stringify(response.data.data));
-      } else if (response.data.authenticated && response.data.user) {
-        // Handle potential legacy response format if any
-        setUser(response.data.user);
-        localStorage.setItem('user', JSON.stringify(response.data.user));
-      } else {
-        // If not authenticated, clear everything
-        // Don't clear immediately if we have stored user, wait for explict 401 which api.js handles
-        // But if success is false, maybe we should? 
-        // Let's rely onapi.js interceptor to handle 401s
+        if (response.data.success && response.data.data) {
+          const userData = response.data.data;
+          setUser(userData);
+          localStorage.setItem('user', JSON.stringify(userData));
+        } else if (response.data.authenticated && response.data.user) {
+          const userData = response.data.user;
+          setUser(userData);
+          localStorage.setItem('user', JSON.stringify(userData));
+        } else {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setUser(null);
+        }
+      } catch (apiError) {
+        if (apiError.response?.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setUser(null);
+        } else {
+          console.warn('Session check error (non-401):', apiError.message);
+          if (storedUser) {
+            try {
+              const parsedUser = JSON.parse(storedUser);
+              setUser(parsedUser);
+            } catch (e) {
+              console.error('Error parsing stored user:', e);
+              localStorage.removeItem('user');
+              setUser(null);
+            }
+          } else {
+            setUser(null);
+          }
+        }
       }
     } catch (err) {
       console.error('Session check failed:', err);
-      // api.js interceptor will handle 401 and redirect if needed
-      // If network error, we might still want to rely on stored user
-      const storedUser = localStorage.getItem('user');
-      if (!storedUser) {
-        setUser(null);
-      }
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setUser(null);
     } finally {
-      // ALWAYS set loading to false
       setLoading(false);
     }
   };
 
   const handleLoginSuccess = (userData) => {
     setUser(userData);
-    // Store user data in localStorage
     localStorage.setItem('user', JSON.stringify(userData));
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    // Clear localStorage
-    localStorage.removeItem('user');
+  const handleLogout = async () => {
+    try {
+      await authAPI.logout();
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setUser(null);
+      localStorage.removeItem('token');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('user');
+    }
   };
 
   if (loading) {
@@ -109,19 +137,36 @@ function App() {
     <ToastProvider>
       <ServerConnectionProvider>
         <OfflineProvider>
-          <ServerConnectionManager />
-          <Router>
-            <Routes>
-              {user.role === 'admin' ? (
-                <Route path="/*" element={<AdminPortal user={user} onLogout={handleLogout} />} />
-              ) : (
-                <>
-                  <Route path="/manager/*" element={<ManagerPortal user={user} onLogout={handleLogout} />} />
-                  <Route path="/*" element={<Navigate to="/manager/orders" replace />} />
-                </>
-              )}
-            </Routes>
-          </Router>
+          <QueryClientProvider client={queryClient}>
+            <QuerySyncBridge />
+            <ServerConnectionManager />
+            {process.env.NODE_ENV === 'development' ? (
+              <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
+            ) : null}
+            <Router>
+              <Routes>
+                {user.role === 'admin' ? (
+                  <>
+                    <Route path="/admin/*" element={<AdminPortal user={user} onLogout={handleLogout} />} />
+                    <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+                    <Route path="/*" element={<Navigate to="/admin/dashboard" replace />} />
+                  </>
+                ) : user.role === 'manager' ? (
+                  <>
+                    <Route path="/manager/*" element={<ManagerPortal user={user} onLogout={handleLogout} />} />
+                    <Route path="/" element={<Navigate to="/manager/orders" replace />} />
+                    <Route path="/*" element={<Navigate to="/manager/orders" replace />} />
+                  </>
+                ) : (
+                  <>
+                    <Route path="/staff/*" element={<StaffPortal user={user} onLogout={handleLogout} />} />
+                    <Route path="/" element={<Navigate to="/staff/orders" replace />} />
+                    <Route path="/*" element={<Navigate to="/staff/orders" replace />} />
+                  </>
+                )}
+              </Routes>
+            </Router>
+          </QueryClientProvider>
         </OfflineProvider>
       </ServerConnectionProvider>
     </ToastProvider>

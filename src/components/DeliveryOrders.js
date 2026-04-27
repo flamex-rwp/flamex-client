@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ordersAPI } from '../services/api';
 import dayjs from 'dayjs';
@@ -9,6 +9,143 @@ import { getOfflineOrders, getOfflineOrdersCount, addPendingOperation, updateOff
 import { isOnline, syncPendingOperations } from '../services/offlineSyncService';
 import { useOffline } from '../contexts/OfflineContext';
 import OfflineIndicator from './OfflineIndicator';
+import AppliedFiltersBanner from './AppliedFiltersBanner';
+import ScreenLoading from './ScreenLoading';
+import { getDateFilterBannerLabel, isCustomDateRangeApplied } from '../utils/dateFilterBanner';
+import {
+  readFilterSession,
+  writeFilterSession,
+  FILTER_STORAGE_KEYS,
+  sanitizeDateFilter
+} from '../utils/filterSessionPersistence';
+import {
+  FaTruck,
+  FaClock,
+  FaCheck,
+  FaMoneyBillWave,
+  FaUniversity,
+  FaUndo,
+  FaDollarSign,
+  FaUserTie,
+  FaEdit,
+  FaTimes,
+  FaExclamationTriangle,
+  FaUser,
+  FaPhone,
+  FaMapMarkerAlt,
+  FaCopy
+} from 'react-icons/fa';
+import { MdWifiOff } from 'react-icons/md';
+
+// Custom Status Dropdown Component with Icons
+const StatusDropdown = ({ value, onChange, disabled, options, style }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  const selectedOption = options.find(opt => opt.value === value) || options[0];
+  const IconComponent = selectedOption.icon;
+
+  return (
+    <div ref={dropdownRef} style={{ position: 'relative', flex: 1, ...style }}>
+      <button
+        type="button"
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          padding: '0.5rem',
+          border: '2px solid #e2e8f0',
+          borderRadius: '6px',
+          background: 'white',
+          color: '#495057',
+          fontWeight: '600',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: '0.85rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.5rem'
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {IconComponent && <IconComponent />}
+          {selectedOption.label}
+        </span>
+        <span style={{ fontSize: '0.75rem' }}>▼</span>
+      </button>
+      {isOpen && !disabled && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: '0.25rem',
+            background: 'white',
+            border: '2px solid #e2e8f0',
+            borderRadius: '6px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            overflow: 'hidden'
+          }}
+        >
+          {options.map((option) => {
+            const OptionIcon = option.icon;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onChange({ target: { value: option.value } });
+                  setIsOpen(false);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '0.5rem',
+                  border: 'none',
+                  background: value === option.value ? '#f0f0f0' : 'white',
+                  color: '#495057',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  textAlign: 'left'
+                }}
+                onMouseEnter={(e) => {
+                  if (value !== option.value) {
+                    e.currentTarget.style.background = '#f8f9fa';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (value !== option.value) {
+                    e.currentTarget.style.background = 'white';
+                  }
+                }}
+              >
+                {OptionIcon && <OptionIcon />}
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 dayjs.extend(relativeTime);
 
@@ -18,23 +155,46 @@ const formatCurrency = (value) => {
   return `PKR ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 };
 
-const DeliveryOrders = () => {
+const DeliveryOrders = ({ basePath = '/manager' }) => {
   const navigate = useNavigate();
   const { showSuccess, showError } = useToast();
-  const [activeTab, setActiveTab] = useState('pending'); // 'pending' or 'completed'
+
+  const initialScreenFilters = useMemo(() => {
+    const s = readFilterSession(FILTER_STORAGE_KEYS.deliveryOrders);
+    if (!s) {
+      return {
+        activeTab: 'pending',
+        dateFilter: 'today',
+        startDate: null,
+        endDate: null,
+        showCustomRange: false
+      };
+    }
+    return {
+      activeTab: s.activeTab === 'completed' ? 'completed' : 'pending',
+      dateFilter: sanitizeDateFilter(s.dateFilter),
+      startDate: s.startDate || null,
+      endDate: s.endDate || null,
+      showCustomRange: Boolean(s.showCustomRange)
+    };
+  }, []);
+
+  const [activeTab, setActiveTab] = useState(initialScreenFilters.activeTab); // 'pending' or 'completed'
   const [pendingOrders, setPendingOrders] = useState([]);
   const [completedOrders, setCompletedOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedDeliveryOrdersOnceRef = useRef(false);
   const [error, setError] = useState('');
-  const [dateFilter, setDateFilter] = useState('today');
-  const [startDate, setStartDate] = useState(null);
-  const [endDate, setEndDate] = useState(null);
-  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [dateFilter, setDateFilter] = useState(initialScreenFilters.dateFilter);
+  const [startDate, setStartDate] = useState(initialScreenFilters.startDate);
+  const [endDate, setEndDate] = useState(initialScreenFilters.endDate);
+  const [showCustomRange, setShowCustomRange] = useState(initialScreenFilters.showCustomRange);
   const [markingPaidId, setMarkingPaidId] = useState(null);
   const [updatingStatusId, setUpdatingStatusId] = useState(null);
   const [cancellingOrderId, setCancellingOrderId] = useState(null);
   const { online } = useOffline();
-  const defaultStats = {
+  // Memoize defaultStats to prevent infinite loops - it's a constant value
+  const defaultStats = useMemo(() => ({
     pending_payments: { count: 0, total_amount: 0 },
     received_payments: { count: 0, total_amount: 0 },
     pending_deliveries: { count: 0, total_amount: 0 },
@@ -45,7 +205,7 @@ const DeliveryOrders = () => {
     total_orders: 0,
     total_revenue: 0,
     average_order_value: 0
-  };
+  }), []);
 
   // Define mergeStats outside component or use useCallback to make it stable
   const mergeStats = useCallback((incoming = {}) => ({
@@ -58,7 +218,7 @@ const DeliveryOrders = () => {
     cod_pending: { ...defaultStats.cod_pending, ...(incoming.cod_pending || {}) },
     cash_payments: { ...defaultStats.cash_payments, ...(incoming.cash_payments || {}) },
     bank_payments: { ...defaultStats.bank_payments, ...(incoming.bank_payments || {}) }
-  }), []);
+  }), [defaultStats]);
 
   const [stats, setStats] = useState(() => ({ ...defaultStats }));
   const [paymentModal, setPaymentModal] = useState({
@@ -77,40 +237,124 @@ const DeliveryOrders = () => {
   const [offlineToastShown, setOfflineToastShown] = useState(false);
   const hasInitialLoad = useRef(false);
   const isUpdatingStatus = useRef(false);
+  
+  // Use refs to always get the latest filter values (avoid stale closures)
+  const dateFilterRef = useRef(dateFilter);
+  const startDateRef = useRef(startDate);
+  const endDateRef = useRef(endDate);
+  
+  // Update refs when values change
+  useEffect(() => {
+    dateFilterRef.current = dateFilter;
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+  }, [dateFilter, startDate, endDate]);
+
+  useEffect(() => {
+    writeFilterSession(FILTER_STORAGE_KEYS.deliveryOrders, {
+      activeTab,
+      dateFilter,
+      startDate,
+      endDate,
+      showCustomRange
+    });
+  }, [activeTab, dateFilter, startDate, endDate, showCustomRange]);
+
+  // Refresh orders + cards when switching tabs
+  useEffect(() => {
+    if (!hasInitialLoad.current) return;
+    const run = async () => {
+      try {
+        await Promise.all([
+          fetchOrders(activeTab),
+          fetchStats(),
+        ]);
+      } catch (e) {
+        // Silently handle
+      }
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const fetchOrders = useCallback(async (tab = null) => {
     const targetTab = tab || activeTab;
     setLoading(true);
     setError('');
     try {
-      const params = {
-        status: targetTab,
-        filter: dateFilter
+      // Always use the latest filter values from refs (not from closure)
+      const currentDateFilter = dateFilterRef.current;
+      const currentStartDate = startDateRef.current;
+      const currentEndDate = endDateRef.current;
+      
+      // Build date params - ensure YYYY-MM-DD format and default to today
+      // Use EXACT same logic as fetchStats and fetchAllOrders
+      let finalStartDate = null;
+      let finalEndDate = null;
+      
+      if (currentDateFilter && currentDateFilter !== 'custom') {
+        // Use dateFilter if it's a quick filter (not custom)
+        if (currentDateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (currentDateFilter === 'custom' && currentStartDate && currentEndDate) {
+        // Use custom dates only if custom filter is selected
+        finalStartDate = currentStartDate;
+        finalEndDate = currentEndDate;
+      } else {
+        // Default to today if no filter
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
+      }
+      
+      const dateParams = {
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : null,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : null
       };
 
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
-      }
+      const params = {
+        orderType: 'delivery',
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : null,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : null
+      };
 
       // Fetch API orders - ONLY when online
       // When offline, don't fetch API orders (even cached ones) - only show orders created offline
       let apiOrders = [];
       if (online) {
         try {
-          const response = await ordersAPI.getDeliveryOrders({ ...params, useCache: false, disableCacheFallback: true, _t: Date.now() });
-          apiOrders = (response.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          const response = await ordersAPI.getDeliveryStats({
+            filter: currentDateFilter,
+            startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+            endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined,
+            status: targetTab,
+            useCache: false,
+            disableCacheFallback: true,
+          });
+          const payload = response.data?.data ?? response.data ?? {};
+          apiOrders = (payload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
 
           // Merge preserved offline status from IndexedDB into API orders
           // This ensures that orders with offline status updates don't revert to pending
           apiOrders = await mergePreservedOfflineStatus(apiOrders);
         } catch (err) {
-          // Silently handle API errors in offline mode
+          // Silently handle API errors
         }
       }
 
-      // Fetch offline orders only when offline; skip when online to avoid stale local orders
-      const offlineOrders = online ? [] : (
+      // In Electron, skip offline orders - all orders are in SQLite
+      const isElectron = typeof window !== 'undefined' && window.electronAPI;
+      const offlineOrders = (isElectron || online) ? [] : (
         await getOfflineOrders()
       ).filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
@@ -123,7 +367,13 @@ const DeliveryOrders = () => {
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
             const paymentStatus = orderData.paymentStatus || orderData.payment_status || 'pending';
             const deliveryStatus = orderData.deliveryStatus || orderData.delivery_status || 'pending';
-            const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || deliveryStatus === 'delivered';
+            // Order is completed if:
+            // 1. orderStatus is 'cancelled', OR
+            // 2. BOTH paymentStatus is 'completed' AND deliveryStatus is 'delivered'
+            const isCancelled = orderStatus === 'cancelled';
+            const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid';
+            const isDelivered = deliveryStatus === 'delivered';
+            const isCompleted = isCancelled || (isPaid && isDelivered);
 
             return {
               ...orderData,
@@ -150,17 +400,17 @@ const DeliveryOrders = () => {
       // Filter offline orders by target tab (pending or completed)
       // For delivery orders, also check deliveryStatus - if 'delivered', it should be in completed tab
       const filteredOfflineOrders = offlineOrders.filter(offlineOrder => {
-        const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
-        const paymentStatus = offlineOrder.paymentStatus || offlineOrder.payment_status || 'pending';
-        const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
+        const orderStatus = (offlineOrder.orderStatus || offlineOrder.order_status || 'pending').toLowerCase();
+        const paymentStatus = (offlineOrder.paymentStatus || offlineOrder.payment_status || 'pending').toLowerCase();
+        const deliveryStatus = (offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending').toLowerCase();
 
-        // Order is completed if:
-        // 1. orderStatus is 'completed', OR
-        // 2. paymentStatus is 'completed', OR
-        // 3. deliveryStatus is 'delivered' (for delivery orders)
-        const isCompleted = orderStatus === 'completed' ||
-          orderStatus === 'cancelled' ||
-          deliveryStatus === 'delivered';
+        // Pending: paymentStatus is NOT 'completed'/'paid' (not yet paid)
+        // Completed: paymentStatus is 'completed'/'paid' AND deliveryStatus is 'delivered' (or cancelled)
+        const isCancelled = orderStatus === 'cancelled';
+        const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid';
+        const isDelivered = deliveryStatus === 'delivered';
+        // Completed = cancelled OR (paid AND delivered)
+        const isCompleted = isCancelled || (isPaid && isDelivered);
 
         const matchesTab = targetTab === 'pending' ? !isCompleted : isCompleted;
         return matchesTab;
@@ -168,17 +418,34 @@ const DeliveryOrders = () => {
 
 
       // Merge API and offline orders, remove duplicates
+      // In Electron, skip offline orders entirely - all orders are in SQLite
+      // isElectron already declared above (line 155)
       const allOrders = [...apiOrders];
-      const apiOrderNumbers = new Set(apiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
+      
+      // Only merge offline orders if NOT in Electron and actually offline
+      if (!isElectron && !online) {
+        const apiOrderNumbers = new Set(apiOrders.map(o => o.order_number || o.orderNumber).filter(Boolean));
+        const apiOrderIds = new Set(apiOrders.map(o => o.id).filter(Boolean));
 
-      filteredOfflineOrders.forEach(offlineOrder => {
-        const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
-        const exists = orderNum ? apiOrderNumbers.has(orderNum) : false;
-
-        if (!exists) {
-          allOrders.push(offlineOrder);
+        // Merge offline orders (already checked isElectron above)
+        {
+          filteredOfflineOrders.forEach(offlineOrder => {
+            const orderNum = offlineOrder.order_number || offlineOrder.orderNumber;
+            const offlineId = offlineOrder.id;
+            
+            // Check for duplicates by order number OR by ID (for synced orders)
+            const existsByNumber = orderNum ? apiOrderNumbers.has(orderNum) : false;
+            const existsById = offlineId ? apiOrderIds.has(offlineId) : false;
+            
+            // Also check if offline order ID contains "OFFLINE-OFFLINE" (duplicate prefix issue)
+            const hasDuplicatePrefix = offlineId && typeof offlineId === 'string' && offlineId.includes('OFFLINE-OFFLINE');
+            
+            if (!existsByNumber && !existsById && !hasDuplicatePrefix) {
+              allOrders.push(offlineOrder);
+            }
+          });
         }
-      });
+      }
 
       // Sort by creation date (newest first)
       allOrders.sort((a, b) => {
@@ -193,21 +460,56 @@ const DeliveryOrders = () => {
         setCompletedOrders(allOrders);
       }
     } catch (err) {
-      console.error('Failed to load delivery orders', err);
       setError(err.response?.data?.error || 'Failed to load orders');
     } finally {
       setLoading(false);
+      hasLoadedDeliveryOrdersOnceRef.current = true;
     }
-  }, [activeTab, dateFilter, startDate, endDate, online]);
+  }, [activeTab, online]); // Remove dateFilter, startDate, endDate from dependencies - we use refs instead
 
   // Fetch both pending and completed orders (for counts)
   const fetchAllOrders = useCallback(async () => {
     try {
-      const params = { filter: dateFilter };
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
+      // Always use the latest filter values from refs (not from closure)
+      const currentDateFilter = dateFilterRef.current;
+      const currentStartDate = startDateRef.current;
+      const currentEndDate = endDateRef.current;
+      
+      // Build date params - ensure YYYY-MM-DD format and default to today
+      // Use EXACT same logic as fetchStats
+      let finalStartDate = null;
+      let finalEndDate = null;
+      
+      if (currentDateFilter && currentDateFilter !== 'custom') {
+        // Use dateFilter if it's a quick filter (not custom)
+        if (currentDateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (currentDateFilter === 'custom' && currentStartDate && currentEndDate) {
+        // Use custom dates only if custom filter is selected
+        finalStartDate = currentStartDate;
+        finalEndDate = currentEndDate;
+      } else {
+        // Default to today if no filter
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
       }
+      
+      const params = {
+        orderType: 'delivery',
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : null,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : null
+      };
 
       // Fetch API orders in parallel - ONLY when online
       // When offline, don't fetch API orders (even cached ones) - only show orders created offline
@@ -215,25 +517,32 @@ const DeliveryOrders = () => {
       let completedApiOrders = [];
       if (online) {
         try {
-          const [pendingResponse, completedResponse] = await Promise.all([
-            ordersAPI.getDeliveryOrders({ ...params, status: 'pending', useCache: false, disableCacheFallback: true, _t: Date.now() }),
-            ordersAPI.getDeliveryOrders({ ...params, status: 'completed', useCache: false, disableCacheFallback: true, _t: Date.now() })
+          const [pendingRes, completedRes] = await Promise.all([
+            ordersAPI.getDeliveryStats({
+              filter: currentDateFilter,
+              startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+              endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined,
+              status: 'pending',
+              useCache: false,
+              disableCacheFallback: true,
+            }),
+            ordersAPI.getDeliveryStats({
+              filter: currentDateFilter,
+              startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+              endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined,
+              status: 'completed',
+              useCache: false,
+              disableCacheFallback: true,
+            }),
           ]);
-          pendingApiOrders = (pendingResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
-          completedApiOrders = (completedResponse.data.data || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
 
-          // Normalize API orders: if paymentStatus is completed, ensure orderStatus is also completed
-          // For delivery orders, also ensure delivery_status is 'delivered' when order is completed
-          const normalizeOrderStatus = (order) => {
-            // Keep server statuses as-is for delivery; do not auto-complete on payment
-            return { ...order };
-          };
+          const pendingPayload = pendingRes.data?.data ?? pendingRes.data ?? {};
+          const completedPayload = completedRes.data?.data ?? completedRes.data ?? {};
 
-          pendingApiOrders = pendingApiOrders.map(normalizeOrderStatus);
-          completedApiOrders = completedApiOrders.map(normalizeOrderStatus);
+          pendingApiOrders = (pendingPayload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
+          completedApiOrders = (completedPayload.orders || []).map(o => ({ ...o, offline: o.offline === true ? true : false }));
 
           // Merge preserved offline status from IndexedDB into API orders
-          // This ensures that orders with offline status updates don't revert to pending
           pendingApiOrders = await mergePreservedOfflineStatus(pendingApiOrders);
           completedApiOrders = await mergePreservedOfflineStatus(completedApiOrders);
         } catch (err) {
@@ -241,15 +550,21 @@ const DeliveryOrders = () => {
         }
       }
 
-      // Fetch offline orders
-      const offlineOrdersData = await getOfflineOrders();
+      // Fetch offline orders - ONLY when NOT in Electron and actually offline
+      // In Electron, all orders are in SQLite, so skip IndexedDB offline orders
+      const isElectron = typeof window !== 'undefined' && window.electronAPI;
+      const offlineOrdersData = (isElectron || online) ? [] : await getOfflineOrders();
       const offlineOrders = offlineOrdersData
         .filter(offlineOrder => !offlineOrder.synced)
         .map((offlineOrder, index) => {
           const orderData = offlineOrder.data || offlineOrder;
           // Only include delivery orders
           if (orderData.order_type === 'delivery' || orderData.orderType === 'delivery') {
-            const uniqueOfflineId = `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
+            // Check if ID already has OFFLINE- prefix to avoid duplicate prefix (OFFLINE-OFFLINE)
+            const existingId = offlineOrder.id || '';
+            const uniqueOfflineId = (typeof existingId === 'string' && existingId.startsWith('OFFLINE-'))
+              ? existingId.replace(/^OFFLINE-OFFLINE-/, 'OFFLINE-') // Fix duplicate prefix
+              : `OFFLINE-${offlineOrder.id || index}-${offlineOrder.timestamp || Date.now()}`;
 
             // Determine order status - check multiple fields and preserve actual status
             const orderStatus = orderData.orderStatus || orderData.order_status || orderData.status || 'pending';
@@ -297,11 +612,17 @@ const DeliveryOrders = () => {
         if (!exists) {
           // Check if order is completed based on status
           // For delivery orders, also check deliveryStatus - if 'delivered', it should be in completed
-          const orderStatus = offlineOrder.orderStatus || offlineOrder.order_status || 'pending';
-          const deliveryStatus = offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending';
+          const orderStatus = (offlineOrder.orderStatus || offlineOrder.order_status || 'pending').toLowerCase();
+          const deliveryStatus = (offlineOrder.deliveryStatus || offlineOrder.delivery_status || 'pending').toLowerCase();
 
-          // Don't mark as completed just because paymentStatus is completed; delivery must be completed or explicitly set
-          const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled' || deliveryStatus === 'delivered';
+          // Pending: paymentStatus is NOT 'completed'/'paid' (not yet paid)
+          // Completed: paymentStatus is 'completed'/'paid' AND deliveryStatus is 'delivered' (or cancelled)
+          const paymentStatus = (offlineOrder.paymentStatus || offlineOrder.payment_status || 'pending').toLowerCase();
+          const isCancelled = orderStatus === 'cancelled';
+          const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid';
+          const isDelivered = deliveryStatus === 'delivered';
+          // Completed = cancelled OR (paid AND delivered)
+          const isCompleted = isCancelled || (isPaid && isDelivered);
 
           if (isCompleted) {
             offlineCompletedOrders.push(offlineOrder);
@@ -311,9 +632,21 @@ const DeliveryOrders = () => {
         }
       });
 
-      // Merge API and offline orders
-      const allPendingOrders = [...pendingApiOrders, ...offlinePendingOrders];
-      const allCompletedOrders = [...completedApiOrders, ...offlineCompletedOrders];
+      // Filter out duplicate offline orders (those with OFFLINE-OFFLINE prefix)
+      const filterDuplicateOffline = (orders) => {
+        return orders.filter(order => {
+          const orderId = order.id || '';
+          // Skip orders with duplicate OFFLINE-OFFLINE prefix
+          if (typeof orderId === 'string' && orderId.includes('OFFLINE-OFFLINE')) {
+            return false;
+          }
+          return true;
+        });
+      };
+
+      // Merge API and offline orders, filtering duplicates
+      const allPendingOrders = filterDuplicateOffline([...pendingApiOrders, ...offlinePendingOrders]);
+      const allCompletedOrders = filterDuplicateOffline([...completedApiOrders, ...offlineCompletedOrders]);
 
       // Sort by creation date (newest first)
       allPendingOrders.sort((a, b) => {
@@ -330,67 +663,353 @@ const DeliveryOrders = () => {
 
       setPendingOrders(allPendingOrders);
       setCompletedOrders(allCompletedOrders);
+      
+      // Calculate stats immediately from the fresh orders we just set
+      // This ensures stats are calculated from the exact same orders that are displayed
+      calculateStatsFromOrders(allPendingOrders, allCompletedOrders);
     } catch (err) {
-      console.error('Failed to load all orders', err);
+      // Silently handle errors
     }
-  }, [dateFilter, startDate, endDate, online]);
+  }, [online]); // Remove dateFilter, startDate, endDate from dependencies - we use refs instead
 
-  // Fetch statistics
+  // Fetch statistics - Calculate from displayed orders (pendingOrders + completedOrders)
+  // Accept orders as parameter to ensure we use fresh data
+  const calculateStatsFromOrders = useCallback((pendingOrdersList, completedOrdersList) => {
+    // When online we rely on backend `/stats` for cards.
+    if (online) return;
+    // Calculate stats from the ACTUAL displayed orders (pendingOrders + completedOrders)
+    // This ensures stats match exactly what the user sees
+    const allDisplayedOrders = [...pendingOrdersList, ...completedOrdersList];
+      
+      // Initialize counters
+      let totalOrders = allDisplayedOrders.length;
+      let totalRevenue = 0;
+      let cashOrders = 0;
+      let cashRevenue = 0;
+      let bankOrders = 0;
+      let bankRevenue = 0;
+      let pendingPaymentsCount = 0;
+      let pendingPaymentsAmount = 0;
+      let receivedPaymentsCount = 0;
+      let receivedPaymentsAmount = 0;
+      let pendingDeliveriesCount = 0;
+      let pendingDeliveriesAmount = 0;
+      let completedDeliveriesCount = 0;
+      let completedDeliveriesAmount = 0;
+      let codPendingCount = 0;
+      let codPendingAmount = 0;
+      
+      // Calculate stats by checking each order's status
+      allDisplayedOrders.forEach(order => {
+        const amount = parseFloat(order.totalAmount || order.total_amount || 0);
+        const orderStatus = (order.orderStatus || order.order_status || 'pending').toLowerCase();
+        const deliveryStatus = (order.deliveryStatus || order.delivery_status || 'pending').toLowerCase();
+        const paymentStatus = (order.paymentStatus || order.payment_status || 'pending').toLowerCase();
+        const paymentMethod = (order.paymentMethod || order.payment_method || 'cash').toLowerCase();
+        const status = (order.status || 'pending').toLowerCase();
+        
+        // Check if order is cancelled - exclude from revenue calculations
+        const isCancelled = orderStatus === 'cancelled' || 
+                           paymentStatus === 'cancelled' || 
+                           status === 'cancelled';
+        
+        // Only count revenue for non-cancelled orders
+        if (!isCancelled) {
+          totalRevenue += amount;
+        }
+        
+        // Check payment status - normalize it
+        const normalizedPaymentStatus = (paymentStatus || 'pending').trim().toLowerCase();
+        const isPaid = normalizedPaymentStatus === 'completed' || 
+                       normalizedPaymentStatus === 'paid' ||
+                       normalizedPaymentStatus === 'complete';
+        const isNotPaid = !isPaid;
+        
+        // Check if order is completed (cancelled OR paid AND delivered)
+        const isDelivered = deliveryStatus === 'delivered';
+        const isOrderCompleted = isCancelled || (isPaid && isDelivered);
+        
+        // Payment Stats
+        // Pending Payments: Orders where payment is NOT paid (exclude cancelled orders)
+        if (isNotPaid && !isCancelled) {
+          pendingPaymentsCount++;
+          pendingPaymentsAmount += amount;
+        }
+        
+        // Received Payments: Orders where payment IS paid (exclude cancelled orders)
+        if (isPaid && !isCancelled) {
+          receivedPaymentsCount++;
+          receivedPaymentsAmount += amount;
+        }
+        
+        // Delivery Stats
+        // Pending Deliveries: Orders that are NOT completed (exclude cancelled from amount)
+        if (!isOrderCompleted) {
+          pendingDeliveriesCount++;
+          if (!isCancelled) {
+            pendingDeliveriesAmount += amount;
+          }
+        } else {
+          // Completed Deliveries: Orders that ARE completed (exclude cancelled from count and amount)
+          if (!isCancelled) {
+            completedDeliveriesCount++;
+            completedDeliveriesAmount += amount;
+          }
+        }
+        
+        // COD Pending: Cash orders that are NOT paid (exclude cancelled orders)
+        if (paymentMethod === 'cash' && isNotPaid && !isCancelled) {
+          codPendingCount++;
+          codPendingAmount += amount;
+        }
+        
+        // Payment Method Stats (exclude cancelled orders)
+        if (!isCancelled) {
+          if (paymentMethod === 'cash') {
+            cashOrders++;
+            cashRevenue += amount;
+          } else if (paymentMethod === 'bank_transfer') {
+            bankOrders++;
+            bankRevenue += amount;
+          }
+        }
+      });
+      
+      // Build stats object
+      const data = {
+        pending_payments: {
+          count: pendingPaymentsCount,
+          total_amount: pendingPaymentsAmount
+        },
+        received_payments: {
+          count: receivedPaymentsCount,
+          total_amount: receivedPaymentsAmount
+        },
+        pending_deliveries: {
+          count: pendingDeliveriesCount,
+          total_amount: pendingDeliveriesAmount
+        },
+        completed_deliveries: {
+          count: completedDeliveriesCount,
+          total_amount: completedDeliveriesAmount
+        },
+        cod_pending: {
+          count: codPendingCount,
+          total_amount: codPendingAmount
+        },
+        cash_payments: {
+          count: cashOrders,
+          total_amount: cashRevenue
+        },
+        bank_payments: {
+          count: bankOrders,
+          total_amount: bankRevenue
+        },
+        total_orders: totalOrders,
+        total_revenue: totalRevenue,
+        average_order_value: totalOrders > 0 ? totalRevenue / totalOrders : 0
+      };
+      
+      // Always merge with defaults to ensure all fields exist
+      const merged = mergeStats(data);
+      
+      setStats(merged);
+  }, [mergeStats, defaultStats, online]);
+  
+  // Fetch statistics for summary cards
   const fetchStats = useCallback(async () => {
     try {
-      const params = { filter: dateFilter };
-      if (startDate && endDate) {
-        params.start = startDate;
-        params.end = endDate;
+      const currentDateFilter = dateFilterRef.current;
+      const currentStartDate = startDateRef.current;
+      const currentEndDate = endDateRef.current;
+
+      let finalStartDate = null;
+      let finalEndDate = null;
+
+      if (currentDateFilter && currentDateFilter !== 'custom') {
+        if (currentDateFilter === 'today') {
+          finalStartDate = dayjs().format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'yesterday') {
+          finalStartDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+          finalEndDate = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_week') {
+          finalStartDate = dayjs().startOf('week').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        } else if (currentDateFilter === 'this_month') {
+          finalStartDate = dayjs().startOf('month').format('YYYY-MM-DD');
+          finalEndDate = dayjs().format('YYYY-MM-DD');
+        }
+      } else if (currentDateFilter === 'custom' && currentStartDate && currentEndDate) {
+        finalStartDate = currentStartDate;
+        finalEndDate = currentEndDate;
+      } else {
+        finalStartDate = dayjs().format('YYYY-MM-DD');
+        finalEndDate = dayjs().format('YYYY-MM-DD');
       }
+
       if (!online) {
-        setStats({ ...defaultStats });
+        // Offline: stats are derived from orders lists
+        calculateStatsFromOrders(pendingOrders, completedOrders);
         return;
       }
 
-      const response = await ordersAPI.getDeliveryStats({ params: { ...params, _t: Date.now() }, useCache: false, disableCacheFallback: true });
-      const data = response.data?.data || response.data || {};
-      // Always merge with defaults to ensure all fields exist
-      const merged = mergeStats(data);
+      const response = await ordersAPI.getDeliveryStats({
+        filter: currentDateFilter,
+        startDate: finalStartDate ? dayjs(finalStartDate).format('YYYY-MM-DD') : undefined,
+        endDate: finalEndDate ? dayjs(finalEndDate).format('YYYY-MM-DD') : undefined,
+        status: activeTab || 'pending',
+      });
+
+      const payload = response.data?.data ?? response.data ?? {};
+      const tabStatus = (activeTab || 'pending').toLowerCase();
+      const isPendingTab = tabStatus === 'pending';
+
+      const count = isPendingTab ? (payload.pendingOrders || 0) : (payload.completedOrders || 0);
+      const revenue = isPendingTab ? (payload.pendingRevenue || 0) : (payload.completedRevenue || 0);
+
+      const merged = mergeStats({
+        pending_payments: {
+          count: isPendingTab ? (payload.pendingOrders || 0) : 0,
+          total_amount: isPendingTab ? (payload.pendingRevenue || 0) : 0,
+        },
+        received_payments: {
+          count: !isPendingTab ? (payload.completedOrders || 0) : 0,
+          total_amount: !isPendingTab ? (payload.completedRevenue || 0) : 0,
+        },
+        // Delivery screen expects delivery stats cards; map them to the same backend counts/revenue.
+        pending_deliveries: {
+          count: isPendingTab ? (payload.pendingOrders || 0) : 0,
+          total_amount: isPendingTab ? (payload.pendingRevenue || 0) : 0,
+        },
+        completed_deliveries: {
+          count: !isPendingTab ? (payload.completedOrders || 0) : 0,
+          total_amount: !isPendingTab ? (payload.completedRevenue || 0) : 0,
+        },
+        cash_payments: {
+          count: payload.cashStats?.count || 0,
+          total_amount: payload.cashStats?.revenue || 0,
+        },
+        bank_payments: {
+          count: payload.bankStats?.count || 0,
+          total_amount: payload.bankStats?.revenue || 0,
+        },
+        total_orders: count,
+        total_revenue: revenue,
+        average_order_value: count > 0 ? (revenue / count) : 0,
+      });
+
       setStats(merged);
     } catch (err) {
-      console.error('Failed to load stats:', err);
-      // Fallback to defaults to avoid runtime errors when offline cache is missing fields
       setStats({ ...defaultStats });
     }
-  }, [dateFilter, startDate, endDate, mergeStats]);
+  }, [activeTab, online, mergeStats, defaultStats, calculateStatsFromOrders, pendingOrders, completedOrders]);
+  
+  // Auto-recalculate stats whenever orders change
+  useEffect(() => {
+    // Only recalculate if we have orders (not on initial empty state)
+    if (pendingOrders.length > 0 || completedOrders.length > 0) {
+      calculateStatsFromOrders(pendingOrders, completedOrders);
+    }
+  }, [pendingOrders, completedOrders, calculateStatsFromOrders]);
 
-  // Fetch data on component mount and when filters change
+  // Initial load - only once (handles React StrictMode double mount)
   useEffect(() => {
     const loadData = async () => {
       if (!hasInitialLoad.current) {
         hasInitialLoad.current = true;
+        // Initialize refs with current values
+        dateFilterRef.current = dateFilter;
+        startDateRef.current = startDate;
+        endDateRef.current = endDate;
       }
+      // Fetch orders + stats
       await Promise.all([
         fetchOrders(),
-        fetchStats(),
-        fetchAllOrders()
+        fetchAllOrders(),
+        fetchStats()
       ]);
     };
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, startDate, endDate, activeTab]); // Only depend on filter values, not callbacks
+  }, []); // Empty deps - only run on mount
 
-  // Show offline pending orders notice (PWA sync)
+  // Reload data when filters change (but not on initial mount)
+  const prevFiltersRef = useRef({ dateFilter: null, startDate: null, endDate: null });
+  const isInitialMountRef = useRef(true);
+
   useEffect(() => {
+    // Skip on initial mount (handled by the initial load useEffect)
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      // Initialize prevFiltersRef with current values
+      prevFiltersRef.current = { dateFilter, startDate, endDate };
+      return;
+    }
+
+    if (!hasInitialLoad.current) return; // Skip if initial load hasn't happened yet
+
+    // Check if filters actually changed
+    const filtersChanged =
+      prevFiltersRef.current.dateFilter !== dateFilter ||
+      prevFiltersRef.current.startDate !== startDate ||
+      prevFiltersRef.current.endDate !== endDate;
+
+    if (!filtersChanged) {
+      return;
+    }
+
+    // Update previous filter values immediately to prevent duplicate calls
+    prevFiltersRef.current = { dateFilter, startDate, endDate };
+    
+    // Update refs IMMEDIATELY and SYNCHRONOUSLY so fetchAllOrders and fetchStats use the latest values
+    dateFilterRef.current = dateFilter;
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+    
+    // CRITICAL: Reset stats to defaults immediately to prevent showing stale data
+    // This ensures users see that stats are being refreshed
+    setStats({ ...defaultStats });
+
+    const loadData = async () => {
+      try {
+        await Promise.all([
+          fetchOrders(), // Update current tab orders
+          fetchAllOrders(),
+          fetchStats(),
+        ]);
+      } catch (error) {
+        // Silently handle errors
+      }
+    };
+    
+    // No delay - refs are already updated synchronously above
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter, startDate, endDate]); // Reload when filters change
+
+  // Show offline pending orders notice (PWA sync) - ONLY for web app, NOT Electron
+  useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && window.electronAPI;
+    // In Electron, all orders are in SQLite, so no need for offline sync notification
+    if (isElectron) return;
+    
     const checkOffline = async () => {
       if (offlineToastShown) return;
       try {
-        const count = await getOfflineOrdersCount();
-        if (count > 0) {
+        const count = await getOfflineOrdersCount({ synced: false });
+        if (count > 0 && online) {
           showError(`You have ${count} offline order(s) pending sync. Keep the app open to sync when online.`);
           setOfflineToastShown(true);
         }
       } catch (err) {
+        // Silently handle errors
       }
     };
-    checkOffline();
-  }, [offlineToastShown, showError]);
+    if (online) {
+      checkOffline();
+    }
+  }, [online, offlineToastShown, showError]);
 
   // When coming back online, sync offline orders first, then refresh from database
   const prevOnlineRef = useRef(online);
@@ -400,26 +1019,22 @@ const DeliveryOrders = () => {
       const syncAndRefresh = async () => {
         try {
           // First, sync pending operations (offline orders and updates) to the database
-          console.log('[DeliveryOrders] Coming back online - syncing pending operations...');
           const syncResult = await syncPendingOperations();
 
           // Only refresh orders from database if sync was successful (or no pending operations)
           if (syncResult && (syncResult.synced > 0 || syncResult.failed === 0)) {
-            console.log('[DeliveryOrders] Sync completed successfully, refreshing orders from database...');
             await Promise.all([
               fetchAllOrders(),
               fetchStats()
             ]);
           } else if (syncResult && syncResult.failed > 0) {
-            console.warn('[DeliveryOrders] Some operations failed to sync:', syncResult.errors);
-            // Still refresh to show current state, but log the errors
+            // Still refresh to show current state
             await Promise.all([
               fetchAllOrders(),
               fetchStats()
             ]);
           }
         } catch (error) {
-          console.error('[DeliveryOrders] Error during sync/refresh:', error);
           // Even if sync fails, try to refresh orders to show current state
           try {
             await Promise.all([
@@ -427,7 +1042,7 @@ const DeliveryOrders = () => {
               fetchStats()
             ]);
           } catch (refreshError) {
-            console.error('[DeliveryOrders] Error refreshing orders:', refreshError);
+            // Silently handle errors
           }
         }
       };
@@ -443,20 +1058,12 @@ const DeliveryOrders = () => {
   // Removed periodic refresh - only refresh on user actions or when coming back online
   // This prevents bad UX from constant page reloading
 
-  // Reset filter to 'today' when switching tabs
-  useEffect(() => {
-    setDateFilter('today');
-    setStartDate(null);
-    setEndDate(null);
-    setShowCustomRange(false);
-  }, [activeTab]);
+  // Keep date filter when switching tabs (pending/completed).
 
   const handleQuickFilter = (filterKey) => {
     if (filterKey === 'custom') {
-      setShowCustomRange(!showCustomRange);
-      if (!showCustomRange) {
-        setDateFilter('custom');
-      }
+      setDateFilter('custom');
+      setShowCustomRange(true);
     } else {
       setDateFilter(filterKey);
       setStartDate(null);
@@ -469,15 +1076,30 @@ const DeliveryOrders = () => {
     setStartDate(start);
     setEndDate(end);
     setDateFilter('custom');
-    setShowCustomRange(true);
+    setShowCustomRange(false);
   };
 
+  const resetDateFilter = useCallback(() => {
+    setDateFilter('today');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(false);
+  }, []);
+
+  const clearAppliedCustomRange = useCallback(() => {
+    setDateFilter('custom');
+    setStartDate(null);
+    setEndDate(null);
+    setShowCustomRange(true);
+  }, []);
+
   const openPaymentModal = (order) => {
+    const orderTotal = order.totalAmount || order.total_amount || 0;
     setPaymentModal({
       open: true,
       order,
       paymentMethod: 'cash',
-      amountTaken: ''
+      amountTaken: orderTotal.toString()
     });
   };
 
@@ -492,6 +1114,15 @@ const DeliveryOrders = () => {
 
   const handleMarkAsPaid = async () => {
     const { order, paymentMethod, amountTaken } = paymentModal;
+    
+    console.log('💰 [DeliveryOrders] Mark as Paid - START:', {
+      orderId: order.id,
+      orderNumber: order.order_number || order.orderNumber,
+      paymentMethod,
+      amountTaken,
+      totalAmount: order.totalAmount || order.total_amount,
+      deliveryStatus: order.deliveryStatus || order.delivery_status
+    });
 
     if (!paymentMethod) {
       showError('Please select a payment method');
@@ -499,7 +1130,8 @@ const DeliveryOrders = () => {
     }
 
     if (paymentMethod === 'cash') {
-      if (!amountTaken || parseFloat(amountTaken) < parseFloat(order.total_amount)) {
+      const orderTotal = order.totalAmount || order.total_amount || 0;
+      if (!amountTaken || parseFloat(amountTaken) < parseFloat(orderTotal)) {
         showError('Amount taken must be greater than or equal to total amount');
         return;
       }
@@ -514,8 +1146,9 @@ const DeliveryOrders = () => {
 
     if (paymentMethod === 'cash') {
       const taken = parseFloat(amountTaken);
+      const orderTotal = order.totalAmount || order.total_amount || 0;
       payload.amountTaken = taken;
-      payload.returnAmount = Math.max(0, taken - parseFloat(order.total_amount));
+      payload.returnAmount = Math.max(0, taken - parseFloat(orderTotal));
     }
 
     try {
@@ -559,14 +1192,28 @@ const DeliveryOrders = () => {
 
         // Only queue mark_as_paid, do NOT auto-complete order or delivery status
 
-
-        // Update local state immediately and move to completed tab (no page refresh)
-        // Update local state immediately (do not move between tabs for delivery orders)
+        // Update local state immediately - check if order should move to completed tab
+        // For delivery orders, order is completed only if BOTH payment is completed AND delivery is delivered
+        const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+        const isDelivered = deliveryStatus === 'delivered';
+        const shouldBeCompleted = isDelivered; // Only completed if delivered
+        
         const updatedOrder = { ...order, ...updatedData };
-        setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
-        setCompletedOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+        
+        if (shouldBeCompleted) {
+          // Move to completed tab
+          setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === order.id);
+            return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+        } else {
+          // Stay in pending tab, just update payment status
+          setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+          setCompletedOrders(prev => prev.filter(o => o.id !== order.id));
+        }
 
-        showSuccess(`Order #${order.order_number || order.id} marked as paid and status updated to completed. Changes will sync when you are back online.`);
+        showSuccess(`Order #${order.order_number || order.id} marked as paid. Changes will sync when you are back online.`);
         closePaymentModal();
 
         // Only refresh stats, not orders (already updated locally)
@@ -578,9 +1225,30 @@ const DeliveryOrders = () => {
         }));
       } else {
         // Online mode
+        console.log('💰 [DeliveryOrders] Mark as Paid - Calling API...', { orderId: order.id, payload });
         await ordersAPI.markAsPaid(order.id, payload);
+        console.log('💰 [DeliveryOrders] Mark as Paid - API call successful');
+        
+        // Verify by fetching the order from database
+        try {
+          const verifyResponse = await ordersAPI.getById(order.id);
+          const verifiedOrder = verifyResponse?.data?.data || verifyResponse?.data;
+          console.log('💰 [DeliveryOrders] Mark as Paid - Verified from database:', {
+            orderId: verifiedOrder?.id,
+            paymentStatus: verifiedOrder?.paymentStatus || verifiedOrder?.payment_status,
+            deliveryStatus: verifiedOrder?.deliveryStatus || verifiedOrder?.delivery_status,
+            orderStatus: verifiedOrder?.orderStatus || verifiedOrder?.order_status
+          });
+        } catch (verifyError) {
+          console.warn('💰 [DeliveryOrders] Mark as Paid - Could not verify (non-critical):', verifyError.message);
+        }
 
-        // Update local state immediately and move to completed tab (no page refresh)
+        // Update local state immediately - check if order should move to completed tab
+        // For delivery orders, order is completed only if BOTH payment is completed AND delivery is delivered
+        const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+        const isDelivered = deliveryStatus === 'delivered';
+        const shouldBeCompleted = isDelivered; // Only completed if delivered
+        
         const updatedOrder = {
           ...order,
           payment_status: 'completed',
@@ -594,14 +1262,27 @@ const DeliveryOrders = () => {
           amount_taken: paymentMethod === 'cash' ? parseFloat(amountTaken) : null,
           return_amount: payload.returnAmount || 0
         };
-        setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
-        setCompletedOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+        
+        if (shouldBeCompleted) {
+          // Move to completed tab
+          setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === order.id);
+            return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+          });
+        } else {
+          // Stay in pending tab, just update payment status
+          setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+          setCompletedOrders(prev => prev.filter(o => o.id !== order.id));
+        }
 
         showSuccess(`Order #${order.order_number || order.id} marked as paid successfully`);
         closePaymentModal();
 
         // Only refresh stats, not orders (already updated locally)
+        console.log('💰 [DeliveryOrders] Mark as Paid - Refetching stats...');
         fetchStats();
+        console.log('💰 [DeliveryOrders] Mark as Paid - COMPLETE');
 
         // Dispatch event to refresh badges immediately
         window.dispatchEvent(new CustomEvent('orderUpdated', {
@@ -609,7 +1290,7 @@ const DeliveryOrders = () => {
         }));
       }
     } catch (err) {
-      console.error('Failed to mark order as paid', err);
+      console.error('💰 [DeliveryOrders] Mark as Paid - ERROR:', err.message);
       // If online but API fails, fall back to offline mode
       if (err.code === 'ERR_NETWORK' || !isOnline()) {
         const realOfflineId = order.offlineId || (order.id?.startsWith('OFFLINE-')
@@ -642,14 +1323,26 @@ const DeliveryOrders = () => {
           });
           // Only queue mark_as_paid, do NOT auto-complete
 
-
-          // Update local state immediately and move to completed tab (no page refresh)
+          // Update local state immediately - check if order should move to completed tab
+          // For delivery orders, order is completed only if BOTH payment is completed AND delivery is delivered
+          const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+          const isDelivered = deliveryStatus === 'delivered';
+          const shouldBeCompleted = isDelivered; // Only completed if delivered
+          
           const updatedOrder = { ...order, ...updatedData };
-          setPendingOrders(prev => prev.filter(o => o.id !== order.id));
-          setCompletedOrders(prev => {
-            const exists = prev.find(o => o.id === order.id);
-            return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
-          });
+          
+          if (shouldBeCompleted) {
+            // Move to completed tab
+            setPendingOrders(prev => prev.filter(o => o.id !== order.id));
+            setCompletedOrders(prev => {
+              const exists = prev.find(o => o.id === order.id);
+              return exists ? prev.map(o => o.id === order.id ? updatedOrder : o) : [...prev, updatedOrder];
+            });
+          } else {
+            // Stay in pending tab, just update payment status
+            setPendingOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+            setCompletedOrders(prev => prev.filter(o => o.id !== order.id));
+          }
 
           showSuccess(`Order #${order.order_number || order.id} marked as paid offline. Changes will sync when connection is restored.`);
           closePaymentModal();
@@ -707,43 +1400,83 @@ const DeliveryOrders = () => {
   };
 
   const handleStatusUpdate = async (orderId, newStatus) => {
+    if (activeTab === 'completed') return;
+    const isDelivered = newStatus === 'delivered';
+    console.log('🚚 [DeliveryOrders] Status Update - START:', {
+      orderId,
+      newStatus,
+      isDelivered,
+      timestamp: new Date().toISOString()
+    });
     setUpdatingStatusId(orderId);
     isUpdatingStatus.current = true;
     try {
       // Ensure orderId is a string
       const orderIdStr = String(orderId || '');
       if (!orderIdStr) {
+        console.error('🚚 [DeliveryOrders] Status Update - ERROR: Invalid order ID');
         throw new Error('Invalid order ID');
       }
 
       const targetOrder = [...pendingOrders, ...completedOrders].find(o =>
         String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId
       );
+      
+      if (!targetOrder) {
+        console.error('🚚 [DeliveryOrders] Status Update - ERROR: Order not found!', { orderId });
+        throw new Error('Order not found');
+      }
+      
+      console.log('🚚 [DeliveryOrders] Status Update - Order details:', {
+        orderId: targetOrder.id,
+        orderNumber: targetOrder.order_number || targetOrder.orderNumber,
+        currentDeliveryStatus: targetOrder.deliveryStatus || targetOrder.delivery_status,
+        currentOrderStatus: targetOrder.orderStatus || targetOrder.order_status,
+        currentPaymentStatus: targetOrder.paymentStatus || targetOrder.payment_status,
+        newStatus,
+        isDelivered
+      });
 
       // Update local state immediately for better UX (no page refresh)
       const updateLocalState = () => {
+        // Helper function to match order IDs (handles string/number conversion and OFFLINE- prefix)
+        const matchesOrderId = (o) => {
+          const oId = String(o.id || '');
+          const targetId = String(orderId || '');
+          return oId === targetId || oId === String(orderId);
+        };
+
+        // Get fresh order from state to ensure we have latest data
+        const currentOrder = [...pendingOrders, ...completedOrders].find(matchesOrderId) || targetOrder;
+        
         const isDelivered = newStatus === 'delivered';
         // For delivery orders, always update deliveryStatus based on newStatus
         // If newStatus is a delivery status (out_for_delivery, delivered), use it
         // Otherwise, use newStatus for delivery status too (pending, preparing, ready)
         const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
-        const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
+        const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (currentOrder?.deliveryStatus || currentOrder?.delivery_status || 'pending');
+
+        // If marking as delivered, automatically mark payment as paid
+        const paymentStatus = isDelivered ? 'completed' : (currentOrder?.paymentStatus || currentOrder?.payment_status || 'pending');
+        const payment_status = isDelivered ? 'completed' : (currentOrder?.payment_status || currentOrder?.paymentStatus || 'pending');
 
         const updatedOrder = {
-          ...targetOrder,
+          ...currentOrder,
           orderStatus: isDelivered ? 'completed' : newStatus,
           order_status: isDelivered ? 'completed' : newStatus,
           deliveryStatus: newDeliveryStatus,
-          delivery_status: newDeliveryStatus
+          delivery_status: newDeliveryStatus,
+          // Auto-mark payment as paid when delivered
+          paymentStatus: paymentStatus,
+          payment_status: payment_status
         };
 
         // Move order between tabs if needed
-        // For delivery orders, completed means deliveryStatus is 'delivered'
-        const shouldBeCompleted = isDelivered || (newStatus === 'completed') || (newDeliveryStatus === 'delivered');
+        // For delivery orders, completed means BOTH payment is completed AND delivery is delivered
+        // Since we auto-mark payment as paid when delivered, check the updated payment status
+        const isPaid = paymentStatus === 'completed' || paymentStatus === 'paid';
+        const shouldBeCompleted = isDelivered && isPaid; // Both delivered AND paid (payment auto-marked when delivered)
         const isCurrentlyPending = activeTab === 'pending';
-
-        // Helper function to match order IDs
-        const matchesOrderId = (o) => String(o.id) === String(orderId) || String(o.id) === orderIdStr || o.id === orderId;
 
         if (shouldBeCompleted && isCurrentlyPending) {
           // Move from pending to completed
@@ -769,32 +1502,37 @@ const DeliveryOrders = () => {
         }
       };
 
-      // If offline, save to pending operations queue
-      if (!isOnline()) {
-        // Extract real order ID (remove OFFLINE- prefix if present)
+      // Electron with local SQL DB - always make direct API call
+      try {
+        // Extract real order ID (remove OFFLINE- prefix if present) for API call
         const realOrderId = orderIdStr.startsWith('OFFLINE-')
           ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
           : orderIdStr;
 
-        // Handle delivery status updates
-        // CRITICAL: Use the offlineId from the target order to ensure we can find it during sync
-        const offlineIdForSync = targetOrder?.offlineId || realOrderId;
+        // Convert to number if it's a numeric string (for Electron API)
+        const numericId = !isNaN(realOrderId) && !isNaN(parseInt(realOrderId)) ? parseInt(realOrderId) : realOrderId;
+
+        // Update local state BEFORE API call for immediate UI feedback
+        updateLocalState();
 
         // For delivery orders, always update delivery status
         const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
         const isDeliveryStatus = deliveryStatuses.includes(newStatus);
 
         if (isDeliveryStatus) {
-          // Update delivery status
-          await addPendingOperation({
-            type: 'update_delivery_status',
-            endpoint: `/api/orders/${realOrderId}/delivery/status`,
-            method: 'PUT',
-            data: { deliveryStatus: newStatus },
-            offlineId: offlineIdForSync // Store offlineId for sync matching
-          });
+          // New backend endpoint: PUT /api/orders/:id/mark-delivered (no body)
+          // Use it only for the terminal "delivered" transition.
+          if (newStatus === 'delivered') {
+            console.log('🚚 [DeliveryOrders] Status Update - Marking delivered via mark-delivered...', { id: numericId });
+            await ordersAPI.markDelivered(numericId);
+            console.log('🚚 [DeliveryOrders] Status Update - mark-delivered API call successful');
+          } else {
+          console.log('🚚 [DeliveryOrders] Status Update - Updating delivery status...', { id: numericId, deliveryStatus: newStatus });
+          // Update delivery status for delivery orders
+          const deliveryResponse = await ordersAPI.updateDeliveryStatus(numericId, newStatus);
+          console.log('🚚 [DeliveryOrders] Status Update - Delivery status API call successful');
 
-          // Also update order status
+          // If delivered, also mark order as completed
           // Map delivery status to valid order status
           let mappedOrderStatus = newStatus;
           if (newStatus === 'out_for_delivery') {
@@ -803,187 +1541,96 @@ const DeliveryOrders = () => {
             mappedOrderStatus = 'completed';
           }
 
-          await addPendingOperation({
-            type: 'update_order_status',
-            endpoint: `/api/orders/${realOrderId}/status`,
-            method: 'PUT',
-            data: { order_status: mappedOrderStatus },
-            offlineId: offlineIdForSync // Store offlineId for sync matching
-          });
-        } else {
-          // For non-delivery statuses, update order status
-          await addPendingOperation({
-            type: 'update_order_status',
-            endpoint: `/api/orders/${realOrderId}/status`,
-            method: 'PUT',
-            data: { order_status: newStatus },
-            offlineId: offlineIdForSync // Store offlineId for sync matching
-          });
-          // Also update delivery status to match
-          await addPendingOperation({
-            type: 'update_delivery_status',
-            endpoint: `/api/orders/${realOrderId}/delivery/status`,
-            method: 'PUT',
-            data: { deliveryStatus: newStatus },
-            offlineId: offlineIdForSync // Store offlineId for sync matching
-          });
-        }
+          console.log('🚚 [DeliveryOrders] Status Update - Updating order status...', { id: numericId, orderStatus: mappedOrderStatus });
+          const orderStatusResponse = await ordersAPI.updateOrderStatus(numericId, mappedOrderStatus);
+          console.log('🚚 [DeliveryOrders] Status Update - Order status API call successful');
 
-        // Also update local offline order if it exists - CRITICAL: Update with offlineId
-        if (targetOrder?.offline) {
-          // For delivery orders, update both order_status and delivery_status
-          const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
-          const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
-
-          await updateOfflineOrder(offlineIdForSync, {
-            order_status: newStatus === 'delivered' ? 'completed' : newStatus,
-            orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
-            delivery_status: newDeliveryStatus,
-            deliveryStatus: newDeliveryStatus,
-            offlineStatusUpdated: true
-          });
-        }
-
-        updateLocalState();
-        // Refresh stats and dispatch event to update badges
-        // Refresh stats and dispatch event to update badges
-        await fetchStats();
-        window.dispatchEvent(new CustomEvent('orderUpdated', {
-          detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated', offline: true }
-        }));
-        showSuccess(`Status update saved offline. It will sync when you are back online.`);
-        setUpdatingStatusId(null);
-        isUpdatingStatus.current = false;
-        return;
-      }
-
-      // Online: try API first
-      if (targetOrder?.offline) {
-        // For delivery orders, update both order_status and delivery_status
-        const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
-        const newDeliveryStatus = deliveryStatuses.includes(newStatus) ? newStatus : (targetOrder?.deliveryStatus || targetOrder?.delivery_status || 'pending');
-
-        await updateOfflineOrder(targetOrder.offlineId || orderIdStr, {
-          order_status: newStatus === 'delivered' ? 'completed' : newStatus,
-          orderStatus: newStatus === 'delivered' ? 'completed' : newStatus,
-          delivery_status: newDeliveryStatus,
-          deliveryStatus: newDeliveryStatus
-        });
-        updateLocalState();
-        // Refresh stats and dispatch event to update badges
-        // Refresh stats and dispatch event to update badges
-        await fetchStats();
-        window.dispatchEvent(new CustomEvent('orderUpdated', {
-          detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated', offline: true }
-        }));
-        showSuccess(`Offline order status updated to ${newStatus.replace(/_/g, ' ')}`);
-      } else {
-        try {
-          // For delivery orders, always update delivery status
-          const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
-          const isDeliveryStatus = deliveryStatuses.includes(newStatus);
-
-          if (isDeliveryStatus) {
-            // Update delivery status for delivery orders
-            await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
-
-            // If delivered, also mark order as completed
-            // Map delivery status to valid order status
-            let mappedOrderStatus = newStatus;
-            if (newStatus === 'out_for_delivery') {
-              mappedOrderStatus = 'ready';
-            } else if (newStatus === 'delivered') {
-              mappedOrderStatus = 'completed';
+          // If marking as delivered, automatically mark payment as paid
+          if (newStatus === 'delivered') {
+            try {
+              const paymentMethod = targetOrder?.payment_method || targetOrder?.paymentMethod || 'cash';
+              console.log('🚚 [DeliveryOrders] Status Update - Auto-marking payment as paid...', { id: numericId, paymentMethod });
+              const paymentResponse = await ordersAPI.markAsPaid(numericId, { paymentMethod });
+              console.log('🚚 [DeliveryOrders] Status Update - Payment marked as paid successfully');
+            } catch (paymentError) {
+              console.warn('🚚 [DeliveryOrders] Status Update - Failed to auto-mark payment (non-critical):', paymentError.message);
+              // Don't fail the whole operation if payment update fails
             }
-
-            await ordersAPI.updateOrderStatus(orderIdStr, mappedOrderStatus);
-          } else {
-            // For non-delivery statuses, update order status
-            await ordersAPI.updateOrderStatus(orderIdStr, newStatus);
-            // Also update delivery status to match
-            await ordersAPI.updateDeliveryStatus(orderIdStr, newStatus);
           }
+          }
+        } else {
+          console.log('🚚 [DeliveryOrders] Status Update - Updating order status (non-delivery)...', { id: numericId, orderStatus: newStatus });
+          // For non-delivery statuses, update order status
+          const orderStatusResponse = await ordersAPI.updateOrderStatus(numericId, newStatus);
+          console.log('🚚 [DeliveryOrders] Status Update - Order status API call successful');
+          
+          // Also update delivery status to match
+          const deliveryResponse = await ordersAPI.updateDeliveryStatus(numericId, newStatus);
+          console.log('🚚 [DeliveryOrders] Status Update - Delivery status API call successful');
+        }
+        
+        // Verify by fetching the order from database
+        try {
+          const verifyResponse = await ordersAPI.getById(numericId);
+          const verifiedOrder = verifyResponse?.data?.data || verifyResponse?.data;
+          const expectedDeliveryStatus = isDeliveryStatus ? newStatus : newStatus;
+          const expectedOrderStatus = isDeliveryStatus 
+            ? (newStatus === 'delivered' ? 'completed' : (newStatus === 'out_for_delivery' ? 'ready' : newStatus))
+            : newStatus;
+          
+          console.log('🚚 [DeliveryOrders] Status Update - Verified from database:', {
+            orderId: verifiedOrder?.id,
+            deliveryStatus: verifiedOrder?.deliveryStatus || verifiedOrder?.delivery_status,
+            orderStatus: verifiedOrder?.orderStatus || verifiedOrder?.order_status,
+            paymentStatus: verifiedOrder?.paymentStatus || verifiedOrder?.payment_status,
+            expectedDeliveryStatus,
+            expectedOrderStatus,
+            deliveryMatch: (verifiedOrder?.deliveryStatus || verifiedOrder?.delivery_status) === expectedDeliveryStatus,
+            orderMatch: (verifiedOrder?.orderStatus || verifiedOrder?.order_status) === expectedOrderStatus
+          });
+        } catch (verifyError) {
+          console.warn('🚚 [DeliveryOrders] Status Update - Could not verify (non-critical):', verifyError.message);
+        }
 
-          updateLocalState();
-          showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}`);
-          // Refresh stats and dispatch event to update badges
-          await fetchStats();
-          // Dispatch event to refresh badges in ManagerPortal
-          window.dispatchEvent(new CustomEvent('orderUpdated', {
-            detail: { orderType: 'delivery', orderId: orderId, action: 'statusUpdated' }
-          }));
-          // Refresh orders to ensure consistency with server (use a small delay to let local state update first)
-          setTimeout(async () => {
-            await fetchAllOrders();
-          }, 500);
-        } catch (error) {
-          // Revert local state on error
+        showSuccess(`Order status updated to ${newStatus.replace(/_/g, ' ')}${newStatus === 'delivered' ? ' and payment marked as paid' : ''}`);
+        // Only refresh stats, not orders - local state already updated
+        console.log('🚚 [DeliveryOrders] Status Update - Refetching stats...');
+        await fetchStats();
+        console.log('🚚 [DeliveryOrders] Status Update - COMPLETE');
+        
+        // Dispatch event to refresh badges in ManagerPortal
+        const finalPaymentStatus = newStatus === 'delivered' ? 'completed' : (targetOrder?.paymentStatus || targetOrder?.payment_status || 'pending');
+        window.dispatchEvent(new CustomEvent('orderUpdated', {
+          detail: { 
+            orderType: 'delivery', 
+            orderId: orderId, 
+            action: 'statusUpdated',
+            deliveryStatus: newStatus,
+            paymentStatus: finalPaymentStatus,
+            orderStatus: newStatus === 'delivered' ? 'completed' : newStatus
+          }
+        }));
+      } catch (error) {
+        console.error('🚚 [DeliveryOrders] Status Update - ERROR:', error.message);
+          
+          // Revert local state on error - use helper function to match IDs
+          const matchesOrderId = (o) => {
+            const oId = String(o.id || '');
+            const targetId = String(orderId || '');
+            return oId === targetId || oId === String(orderId);
+          };
+          
           const revertOrder = { ...targetOrder };
           if (activeTab === 'pending') {
-            setPendingOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+            setPendingOrders(prev => prev.map(o => matchesOrderId(o) ? revertOrder : o));
           } else {
-            setCompletedOrders(prev => prev.map(o => o.id === orderId ? revertOrder : o));
+            setCompletedOrders(prev => prev.map(o => matchesOrderId(o) ? revertOrder : o));
           }
 
-          // If API fails, save to pending operations
-          if (!error.response) {
-            const realOrderId = orderIdStr.startsWith('OFFLINE-')
-              ? (targetOrder?.offlineId || orderIdStr.replace(/^OFFLINE-.*?-/, ''))
-              : orderIdStr;
-
-            // For delivery orders, always update delivery status
-            const deliveryStatuses = ['pending', 'preparing', 'ready', 'out_for_delivery', 'delivered'];
-            const isDeliveryStatus = deliveryStatuses.includes(newStatus);
-
-            if (isDeliveryStatus) {
-              // Update delivery status
-              await addPendingOperation({
-                type: 'update_delivery_status',
-                endpoint: `/api/orders/${realOrderId}/delivery/status`,
-                method: 'PUT',
-                data: { deliveryStatus: newStatus }
-              });
-
-              // Also update order status
-              // Map delivery status to valid order status
-              let mappedOrderStatus = newStatus;
-              if (newStatus === 'out_for_delivery') {
-                mappedOrderStatus = 'ready';
-              } else if (newStatus === 'delivered') {
-                mappedOrderStatus = 'completed';
-              }
-
-              await addPendingOperation({
-                type: 'update_order_status',
-                endpoint: `/api/orders/${realOrderId}/status`,
-                method: 'PUT',
-                data: { order_status: mappedOrderStatus }
-              });
-            } else {
-              // For non-delivery statuses, update order status
-              await addPendingOperation({
-                type: 'update_order_status',
-                endpoint: `/api/orders/${realOrderId}/status`,
-                method: 'PUT',
-                data: { order_status: newStatus }
-              });
-              // Also update delivery status to match
-              await addPendingOperation({
-                type: 'update_delivery_status',
-                endpoint: `/api/orders/${realOrderId}/delivery/status`,
-                method: 'PUT',
-                data: { deliveryStatus: newStatus }
-              });
-            }
-            updateLocalState();
-            showSuccess(`Status update saved offline. It will sync when connection is restored.`);
-          } else {
-            throw error;
-          }
-        }
+        throw error;
       }
     } catch (err) {
-      console.error('Failed to update order status', err);
+      console.error('🚚 [DeliveryOrders] Status Update - CRITICAL ERROR:', err.message);
       showError(err.formattedMessage || err.response?.data?.error || 'Failed to update order status');
     } finally {
       setUpdatingStatusId(null);
@@ -1006,12 +1653,21 @@ const DeliveryOrders = () => {
             ...targetOrder,
             order_status: 'cancelled',
             orderStatus: 'cancelled',
-            status: 'cancelled'
+            status: 'cancelled',
+            payment_status: 'cancelled',
+            paymentStatus: 'cancelled',
+            delivery_status: 'cancelled',
+            deliveryStatus: 'cancelled'
           };
 
-          // Remove from both lists
+          // Move cancelled order into completed list so it is still visible
           setPendingOrders(prev => prev.filter(o => o.id !== orderId));
-          setCompletedOrders(prev => prev.filter(o => o.id !== orderId));
+          setCompletedOrders(prev => {
+            const exists = prev.find(o => o.id === orderId);
+            return exists
+              ? prev.map(o => (o.id === orderId ? updatedOrder : o))
+              : [...prev, updatedOrder];
+          });
 
           await ordersAPI.cancelOrder(orderId);
           showSuccess('Order cancelled successfully');
@@ -1019,7 +1675,6 @@ const DeliveryOrders = () => {
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
         } catch (err) {
-          console.error('Failed to cancel order', err);
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to cancel order');
           // Revert local state on error
           await fetchAllOrders();
@@ -1064,7 +1719,6 @@ const DeliveryOrders = () => {
           // Only refresh stats, not orders (already updated locally)
           fetchStats();
         } catch (err) {
-          console.error('Failed to revert payment status', err);
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to revert payment status');
           // Revert local state on error
           await fetchAllOrders();
@@ -1084,7 +1738,9 @@ const DeliveryOrders = () => {
     <div style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
       <OfflineIndicator />
       <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold' }}>🚚 Delivery Orders</h1>
+        <h1 style={{ marginBottom: '1rem', color: '#2d3748', fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <FaTruck /> Delivery Orders
+        </h1>
 
         {/* Summary Cards */}
         <style>{`
@@ -1112,7 +1768,7 @@ const DeliveryOrders = () => {
         `}</style>
         <div className="summary-cards-grid">
           {/* Pending Payments */}
-          <div style={{
+          {/* <div style={{
             background: 'linear-gradient(135deg, #ffc107 0%, #ff9800 100%)',
             padding: '1.5rem',
             borderRadius: '12px',
@@ -1130,7 +1786,7 @@ const DeliveryOrders = () => {
             <div style={{ fontSize: '1.1rem', opacity: 0.9 }}>
               {formatCurrency(safeStats.pending_payments?.total_amount ?? 0)}
             </div>
-          </div>
+          </div> */}
 
           {/* Received Payments */}
           <div style={{
@@ -1228,7 +1884,9 @@ const DeliveryOrders = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>💵 Cash Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <FaMoneyBillWave /> Cash Payments
+            </div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {safeStats.cash_payments?.count ?? 0}
             </div>
@@ -1249,7 +1907,9 @@ const DeliveryOrders = () => {
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}>
-            <div style={{ fontSize: '0.9rem', opacity: 0.9 }}>🏦 Bank Payments</div>
+            <div style={{ fontSize: '0.9rem', opacity: 0.9, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <FaUniversity /> Bank Payments
+            </div>
             <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>
               {safeStats.bank_payments?.count ?? 0}
             </div>
@@ -1279,7 +1939,7 @@ const DeliveryOrders = () => {
               fontSize: '1rem'
             }}
           >
-            ⏳ Pending ({pendingOrders.length})
+            <FaClock style={{ marginRight: '0.25rem' }} /> Pending ({pendingOrders.length})
           </button>
           <button
             onClick={() => setActiveTab('completed')}
@@ -1294,7 +1954,7 @@ const DeliveryOrders = () => {
               fontSize: '1rem'
             }}
           >
-            ✅ Completed ({completedOrders.length})
+            <FaCheck style={{ marginRight: '0.25rem' }} /> Completed ({completedOrders.length})
           </button>
         </div>
 
@@ -1408,27 +2068,25 @@ const DeliveryOrders = () => {
             </div>
           )}
 
-          {(dateFilter === 'custom' && startDate && endDate) && (
-            <div style={{
-              marginTop: '0.75rem',
-              padding: '0.5rem 0.75rem',
-              background: '#fff4d8',
-              borderRadius: '6px',
-              fontSize: '0.85rem',
-              color: '#7c2d12',
-              fontWeight: '600'
-            }}>
-              Active Range: {dayjs(startDate).format('MMM D, YYYY')} → {dayjs(endDate).format('MMM D, YYYY')}
-            </div>
-          )}
+          <AppliedFiltersBanner
+            items={
+              isCustomDateRangeApplied(dateFilter, startDate, endDate)
+                ? [
+                    {
+                      id: 'date',
+                      label: getDateFilterBannerLabel(dateFilter, startDate, endDate, dayjs),
+                      onRemove: clearAppliedCustomRange
+                    }
+                  ]
+                : []
+            }
+          />
         </div>
       </div>
 
-      {/* Orders List */}
+      {/* Orders List — show screen loading on every fetch/refetch */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '3rem', color: '#6c757d' }}>
-          Loading orders...
-        </div>
+        <ScreenLoading label="Loading orders..." />
       ) : error ? (
         <div style={{
           background: '#fff5f5',
@@ -1449,7 +2107,7 @@ const DeliveryOrders = () => {
           color: '#6c757d'
         }}>
           <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-            {activeTab === 'pending' ? '⏳' : '✅'}
+            {activeTab === 'pending' ? <FaClock /> : <FaCheck />}
           </div>
           <h3>No {activeTab} orders found</h3>
           <p>Try adjusting your date filters</p>
@@ -1489,7 +2147,7 @@ const DeliveryOrders = () => {
                         fontWeight: '600',
                         border: '1px solid #ffc107'
                       }}>
-                        📴 Offline (Pending Sync)
+                        <MdWifiOff style={{ marginRight: '0.25rem' }} /> Offline (Pending Sync)
                       </span>
                     )}
                   </h3>
@@ -1498,18 +2156,32 @@ const DeliveryOrders = () => {
                   </p>
                   {activeTab === 'pending' && (
                     <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem', fontWeight: '600', color: getDurationColor(order.createdAt || order.created_at) }}>
-                      ⏱️ Waiting: {getOrderDuration(order.createdAt || order.created_at)}
+                      <FaClock style={{ marginRight: '0.25rem' }} /> Waiting: {getOrderDuration(order.createdAt || order.created_at)}
                     </p>
                   )}
                   {/* Customer Info */}
-                  {(order.customer?.name || order.customer_name) && (
+                  {(order.customer?.name ||
+                    order.customer_name ||
+                    order.customerName ||
+                    order.deliveryName) && (
                     <div style={{ marginTop: '0.5rem' }}>
                       <p style={{ margin: '0.25rem 0', fontSize: '0.9rem', fontWeight: '600', color: '#2d3748' }}>
-                        👤 {order.customer?.name || order.customer_name}
+                        <FaUser style={{ marginRight: '0.25rem' }} />{' '}
+                        {order.customer?.name ||
+                          order.customer_name ||
+                          order.customerName ||
+                          order.deliveryName}
                       </p>
                       {(() => {
-                        const phone = order.customer?.phone || order.customer_phone;
-                        const address = order.deliveryAddress || order.delivery_address;
+                        const phone =
+                          order.customer?.phone ||
+                          order.customer_phone ||
+                          order.customerPhone ||
+                          order.deliveryPhone;
+                        const address =
+                          order.deliveryAddress ||
+                          order.delivery_address ||
+                          order.customer_address;
                         // Try to get notes and Google Maps link from order first, then fallback to customer's address
                         let notes = order.deliveryNotes || order.delivery_notes || '';
                         let googleLink = order.googleMapsLink || order.google_maps_link || '';
@@ -1543,24 +2215,41 @@ const DeliveryOrders = () => {
                             }
                           }
 
+                          // Get customer name, delivery status, and amount
+                          const customerName = order.customer?.name || order.customer_name || order.customerName || order.deliveryName || '';
+                          const deliveryStatus = order.deliveryStatus || order.delivery_status || 'pending';
+                          const totalAmount = order.totalAmount || order.total_amount || 0;
+
                           let copyText = '';
-                          if (phone) copyText += `Phone: ${phone}`;
+                          if (customerName) copyText += `Name: ${customerName}`;
+                          if (phone) {
+                            if (copyText) copyText += '\n';
+                            copyText += `Phone Number: ${phone}`;
+                          }
                           if (address) {
                             if (copyText) copyText += '\n';
-                            copyText += `Address: ${address}`;
-                          }
-                          if (currentNotes && currentNotes.trim()) {
-                            if (copyText) copyText += '\n\n';
-                            copyText += `Notes: ${currentNotes}`;
+                            copyText += `Location: ${address}`;
                           }
                           if (currentGoogleLink && currentGoogleLink.trim()) {
-                            if (copyText) copyText += '\n\n';
-                            copyText += `Google Maps: ${currentGoogleLink}`;
+                            if (copyText) copyText += '\n';
+                            copyText += `Map Link: ${currentGoogleLink}`;
+                          }
+                          if (deliveryStatus) {
+                            if (copyText) copyText += '\n';
+                            copyText += `Delivery Status: ${deliveryStatus.replace(/_/g, ' ')}`;
+                          }
+                          if (totalAmount) {
+                            if (copyText) copyText += '\n';
+                            copyText += `Amount: ${formatCurrency(totalAmount)}`;
+                          }
+                          if (currentNotes && currentNotes.trim()) {
+                            if (copyText) copyText += '\n';
+                            copyText += `Notes: ${currentNotes}`;
                           }
 
                           try {
                             await navigator.clipboard.writeText(copyText);
-                            showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                            showSuccess('Order information copied to clipboard!');
                           } catch (err) {
                             // Fallback for older browsers
                             const textArea = document.createElement('textarea');
@@ -1569,7 +2258,7 @@ const DeliveryOrders = () => {
                             textArea.select();
                             document.execCommand('copy');
                             document.body.removeChild(textArea);
-                            showSuccess('Phone, address, notes, and Google Maps link copied to clipboard!');
+                            showSuccess('Order information copied to clipboard!');
                           }
                         };
 
@@ -1612,7 +2301,7 @@ const DeliveryOrders = () => {
                                   transition: 'background-color 0.2s ease'
                                 }}
                               >
-                                📞 {phone}
+                                <FaPhone style={{ marginRight: '0.25rem' }} /> {phone}
                               </p>
                             )}
                             {address && (
@@ -1629,7 +2318,7 @@ const DeliveryOrders = () => {
                                     transition: 'background-color 0.2s ease'
                                   }}
                                 >
-                                  📍 {address}
+                                  <FaMapMarkerAlt style={{ marginRight: '0.25rem' }} /> {address}
                                 </p>
                                 <button
                                   onClick={handleCopy}
@@ -1645,28 +2334,15 @@ const DeliveryOrders = () => {
                                     justifyContent: 'center',
                                     transition: 'transform 0.2s ease'
                                   }}
-                                  title="Copy phone number, address, notes, and Google Maps link"
+                                  title="Copy order information (name, phone, location, map link, delivery status, amount)"
                                 >
-                                  📋
+                                  <FaCopy />
                                 </button>
                               </div>
                             )}
                             {notes && (
                               <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
                                 <strong>Notes:</strong> {notes}
-                              </div>
-                            )}
-                            {googleLink && (
-                              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#6c757d' }}>
-                                <strong>Google Maps:</strong>{' '}
-                                <a
-                                  href={googleLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{ color: '#339af0', textDecoration: 'underline', wordBreak: 'break-all' }}
-                                >
-                                  {googleLink}
-                                </a>
                               </div>
                             )}
                           </div>
@@ -1691,33 +2367,80 @@ const DeliveryOrders = () => {
                         }
                       }
 
-                      return displayStatus ? (
-                        <div style={{
-                          padding: '0.25rem 0.75rem',
-                          borderRadius: '20px',
-                          background: getOrderStatusColor(displayStatus).background,
-                          color: getOrderStatusColor(displayStatus).color,
-                          fontSize: '0.8rem',
-                          fontWeight: '600',
-                          textTransform: 'capitalize'
-                        }}>
-                          {/* Order: {displayStatus.replace(/_/g, ' ')} */}
+                      // For cancelled orders, we'll show a separate explicit badge below.
+                      if (!displayStatus || displayStatus === 'cancelled') return null;
+
+                      return (
+                        <div
+                          style={{
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '20px',
+                            background: getOrderStatusColor(displayStatus).background,
+                            color: getOrderStatusColor(displayStatus).color,
+                            fontSize: '0.8rem',
+                            fontWeight: '600',
+                            textTransform: 'capitalize'
+                          }}
+                        >
+                          {String(displayStatus).replace(/_/g, ' ')}
                         </div>
-                      ) : null;
+                      );
                     })()}
-                    {order.delivery_status && (
-                      <div style={{
-                        padding: '0.25rem 0.75rem',
-                        borderRadius: '20px',
-                        background: getDeliveryStatusColor(order.delivery_status).background,
-                        color: getDeliveryStatusColor(order.delivery_status).color,
-                        fontSize: '0.8rem',
-                        fontWeight: '600',
-                        textTransform: 'capitalize'
-                      }}>
-                        Delivery: {(order.deliveryStatus || order.delivery_status).replace(/_/g, ' ')}
-                      </div>
-                    )}
+                    {(() => {
+                      const deliveryStatus = order.deliveryStatus || order.delivery_status;
+                      // Only show delivery status badge if it exists and is not 'delivered' (to avoid showing "Delivery: Delivered" incorrectly)
+                      const orderStatus = order.orderStatus || order.order_status;
+                      const resolvedOrderStatus = (() => {
+                        if (!orderStatus) return undefined;
+                        if (orderStatus === 'completed' && deliveryStatus && deliveryStatus !== 'delivered') return deliveryStatus;
+                        return orderStatus;
+                      })();
+
+                      // Avoid duplicate badges when order status already reflects delivery status
+                      if (
+                        deliveryStatus &&
+                        deliveryStatus !== 'delivered' &&
+                        resolvedOrderStatus !== deliveryStatus
+                      ) {
+                        return (
+                          <div style={{
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '20px',
+                            background: getDeliveryStatusColor(deliveryStatus).background,
+                            color: getDeliveryStatusColor(deliveryStatus).color,
+                            fontSize: '0.8rem',
+                            fontWeight: '600',
+                            textTransform: 'capitalize'
+                          }}>
+                            {deliveryStatus.replace(/_/g, ' ')}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    {/* Cancelled badge */}
+                    {(() => {
+                      const orderStatus = (order.orderStatus || order.order_status || '').toLowerCase();
+                      if (orderStatus !== 'cancelled') return null;
+                      return (
+                        <div
+                          style={{
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '20px',
+                            background: '#f8d7da',
+                            color: '#721c24',
+                            fontSize: '0.8rem',
+                            fontWeight: '700',
+                            textTransform: 'uppercase',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem'
+                          }}
+                        >
+                          <FaTimes /> Cancelled
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -1737,13 +2460,30 @@ const DeliveryOrders = () => {
                     marginTop: '0.5rem',
                     padding: '0.25rem 0.75rem',
                     borderRadius: '20px',
-                    background: order.payment_status === 'completed' ? '#e6ffed' : '#fff4d8',
-                    color: order.payment_status === 'completed' ? '#198754' : '#7c2d12',
+                    background: (() => {
+                      const isCancelled = order.orderStatus === 'cancelled' || order.order_status === 'cancelled';
+                      const isPaid = (order.paymentStatus || order.payment_status) === 'completed';
+                      if (isCancelled) return '#fee2e2';
+                      return isPaid ? '#e6ffed' : '#fff4d8';
+                    })(),
+                    color: (() => {
+                      const isCancelled = order.orderStatus === 'cancelled' || order.order_status === 'cancelled';
+                      const isPaid = (order.paymentStatus || order.payment_status) === 'completed';
+                      if (isCancelled) return '#dc2626';
+                      return isPaid ? '#198754' : '#7c2d12';
+                    })(),
                     fontSize: '0.85rem',
                     fontWeight: '600',
                     display: 'inline-block'
                   }}>
-                    {(order.paymentStatus || order.payment_status) === 'completed' ? 'Paid' : 'Pending Payment'}
+                    {(() => {
+                      const isCancelled = order.orderStatus === 'cancelled' || order.order_status === 'cancelled';
+                      const isPaid = (order.paymentStatus || order.payment_status) === 'completed';
+                      if (isCancelled) {
+                        return 'Cancelled';
+                      }
+                      return isPaid ? 'Paid' : 'Pending Payment';
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1761,11 +2501,31 @@ const DeliveryOrders = () => {
                   {(() => {
                     const items = order.orderItems || order.order_items || order.items || [];
                     if (items.length > 0) {
-                      return items.map((item, idx) => (
-                        <div key={idx}>
-                          {item.quantity}x {item.menuItem?.name || item.menu_item?.name || item.item_name || item.name || 'Item'}
-                        </div>
-                      ));
+                      return items.map((item, idx) => {
+                        const reason =
+                          item.reason ||
+                          item.cancel_reason ||
+                          item.cancellation_reason ||
+                          item.note ||
+                          item.notes;
+                        return (
+                          <div key={idx} style={{ marginBottom: reason ? '0.25rem' : 0 }}>
+                            <div>
+                              {item.quantity}x{' '}
+                              {item.menuItem?.name ||
+                                item.menu_item?.name ||
+                                item.item_name ||
+                                item.name ||
+                                'Item'}
+                            </div>
+                            {reason && (
+                              <div style={{ fontSize: '0.8rem', color: '#b02a37' }}>
+                                <strong>Reason:</strong> {reason}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
                     } else {
                       return 'No items';
                     }
@@ -1778,11 +2538,13 @@ const DeliveryOrders = () => {
                 (order.deliveryNotes || order.delivery_notes || order.googleMapsLink || order.google_maps_link) && (
                   <div style={{
                     marginTop: '0.75rem',
+                    marginBottom: '0.75rem',
                     padding: '0.75rem',
-                    background: '#fff4d8',
+                    background: '#f1f3f5',
+                    border: '1px solid #e9ecef',
                     borderRadius: '8px',
                     fontSize: '0.85rem',
-                    color: '#7c2d12'
+                    color: '#495057'
                   }}>
                     {order.deliveryNotes || order.delivery_notes ? (
                       <div style={{ marginBottom: order.googleMapsLink || order.google_maps_link ? '0.5rem' : '0' }}>
@@ -1790,7 +2552,7 @@ const DeliveryOrders = () => {
                       </div>
                     ) : null}
                     {order.googleMapsLink || order.google_maps_link ? (
-                      <div>
+                      <div style={{ marginBottom: '0.25rem' }}>
                         <strong>Google Maps:</strong>{' '}
                         <a
                           href={order.googleMapsLink || order.google_maps_link}
@@ -1818,7 +2580,7 @@ const DeliveryOrders = () => {
                     color: '#856404',
                     fontWeight: '600'
                   }}>
-                    ⚠️ <strong>Special Instructions:</strong> {order.specialInstructions || order.special_instructions}
+                    <FaExclamationTriangle style={{ marginRight: '0.25rem' }} /> <strong>Special Instructions:</strong> {order.specialInstructions || order.special_instructions}
                   </div>
                 )
               }
@@ -1830,7 +2592,7 @@ const DeliveryOrders = () => {
                     <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#495057', minWidth: '80px' }}>
                       Status:
                     </label>
-                    <select
+                    <StatusDropdown
                       value={(() => {
                         const dStatus = order.deliveryStatus || order.delivery_status;
                         if (dStatus === 'out_for_delivery' || dStatus === 'delivered') return dStatus;
@@ -1838,23 +2600,13 @@ const DeliveryOrders = () => {
                       })()}
                       onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
                       disabled={updatingStatusId === order.id}
-                      style={{
-                        flex: 1,
-                        padding: '0.5rem',
-                        border: '2px solid #e2e8f0',
-                        borderRadius: '6px',
-                        background: 'white',
-                        color: '#495057',
-                        fontWeight: '600',
-                        cursor: updatingStatusId === order.id ? 'not-allowed' : 'pointer',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="pending">⏳ Pending</option>
-                      <option value="preparing">👨‍🍳 Preparing</option>
-                      <option value="out_for_delivery">🚚 Out for Delivery</option>
-                      <option value="delivered">✅ Delivered</option>
-                    </select>
+                      options={[
+                        { value: 'pending', label: 'Pending', icon: FaClock },
+                        { value: 'preparing', label: 'Preparing', icon: FaUserTie },
+                        { value: 'out_for_delivery', label: 'Out for Delivery', icon: FaTruck },
+                        { value: 'delivered', label: 'Delivered', icon: FaCheck }
+                      ]}
+                    />
                   </div>
 
                   {/* Offline Status Label - Show when status was updated offline */}
@@ -1871,7 +2623,7 @@ const DeliveryOrders = () => {
                       gap: '0.3rem',
                       marginTop: '0.5rem'
                     }}>
-                      <span>📴</span>
+                      <span><MdWifiOff /></span>
                       <span>
                         Status: {(() => {
                           const status = order.orderStatus || order.order_status || 'pending';
@@ -1882,52 +2634,138 @@ const DeliveryOrders = () => {
                   )}
 
                   {/* Action Buttons */}
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      onClick={() => {
-                        sessionStorage.setItem('orderToEdit', JSON.stringify({
-                          id: order.id,
-                          orderType: 'delivery',
-                          offline: order.offline || false,
-                          offlineId: order.offlineId || null
-                        }));
-                        navigate('/manager/orders');
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: '0.75rem',
-                        border: '2px solid #007bff',
-                        borderRadius: '8px',
-                        background: 'white',
-                        color: '#007bff',
-                        fontWeight: 'bold',
-                        cursor: 'pointer',
-                        fontSize: '0.9rem'
-                      }}
-                    >
-                      ✏️ Edit Order
-                    </button>
-                    <button
-                      onClick={() => handleCancelOrder(order.id)}
-                      disabled={cancellingOrderId === order.id || order.offline}
-                      style={{
-                        flex: 1,
-                        padding: '0.75rem',
-                        border: '2px solid #dc3545',
-                        borderRadius: '8px',
-                        background: order.offline ? '#f8f9fa' : 'white',
-                        color: order.offline ? '#adb5bd' : '#dc3545',
-                        fontWeight: 'bold',
-                        cursor: (cancellingOrderId === order.id || order.offline) ? 'not-allowed' : 'pointer',
-                        fontSize: '0.9rem',
-                        opacity: (cancellingOrderId === order.id || order.offline) ? 0.6 : 1
-                      }}
-                    >
-                      {cancellingOrderId === order.id ? '...' : '❌ Cancel'}
-                    </button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
+                    {/* Mark as Paid Button - hidden when already paid */}
+                    {(() => {
+                      const orderStatus = (order.orderStatus || order.order_status || order.status || 'pending').toLowerCase();
+                      const deliveryStatus = (order.deliveryStatus || order.delivery_status || '').toLowerCase();
+                      const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled';
+                      const isDelivered = deliveryStatus === 'delivered';
+
+                      // Show the button whenever the order is still pending work (not delivered/completed),
+                      // even if payment status is already marked as paid (backend can be inconsistent).
+                      if (isCompleted || isDelivered) return null;
+
+                      return (
+                        <button
+                          onClick={() => handleStatusUpdate(order.id, 'delivered')}
+                          disabled={updatingStatusId === order.id || order.offline}
+                          style={{
+                            width: '100%',
+                            padding: '0.75rem',
+                            border: 'none',
+                            borderRadius: '8px',
+                            background: (updatingStatusId === order.id || order.offline) ? '#6c757d' : 'var(--gradient-primary)',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            cursor: (updatingStatusId === order.id || order.offline) ? 'not-allowed' : 'pointer',
+                            fontSize: '0.9rem',
+                            opacity: (updatingStatusId === order.id || order.offline) ? 0.6 : 1,
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          {updatingStatusId === order.id
+                            ? <><FaClock style={{ marginRight: '0.25rem' }} /> Processing...</>
+                            : <><FaDollarSign style={{ marginRight: '0.25rem' }} /> Mark as Paid</>}
+                        </button>
+                      );
+                    })()}
+                    
+                    {/* Mark as Delivered Button - Commented out (old conditional button) */}
+                    {/* {(() => {
+                      const deliveryStatus = order.deliveryStatus || order.delivery_status;
+                      const orderStatus = order.orderStatus || order.order_status || 'pending';
+                      const paymentStatus = order.paymentStatus || order.payment_status || 'pending';
+                      
+                      // Hide button for all statuses (pending, preparing, out_for_delivery, etc.)
+                      // Don't show button if:
+                      // - Already delivered
+                      // - Order is completed or cancelled
+                      // - Order status is preparing
+                      // - Order status is pending
+                      // - Order status is out_for_delivery
+                      // - Payment is paid/completed
+                      const isDelivered = deliveryStatus === 'delivered';
+                      const isCompleted = orderStatus === 'completed' || orderStatus === 'cancelled';
+                      const isPreparing = orderStatus === 'preparing';
+                      const isPending = orderStatus === 'pending';
+                      const isOutForDelivery = deliveryStatus === 'out_for_delivery' || orderStatus === 'out_for_delivery';
+                      const isPaid = paymentStatus === 'paid' || paymentStatus === 'completed';
+                      
+                      // Hide button for all statuses
+                      const shouldShowButton = false;
+                      
+                      return shouldShowButton ? (
+                        <button
+                          onClick={() => handleStatusUpdate(order.id, 'delivered')}
+                          disabled={updatingStatusId === order.id}
+                          style={{
+                            width: '100%',
+                            padding: '0.75rem',
+                            border: 'none',
+                            borderRadius: '8px',
+                            background: updatingStatusId === order.id ? '#6c757d' : 'var(--gradient-primary)',
+                            color: 'white',
+                            fontWeight: 'bold',
+                            cursor: updatingStatusId === order.id ? 'not-allowed' : 'pointer',
+                            fontSize: '0.9rem',
+                            opacity: updatingStatusId === order.id ? 0.6 : 1,
+                            transition: 'all 0.2s'
+                          }}
+                        >
+                          {updatingStatusId === order.id ? <><FaClock style={{ marginRight: '0.25rem' }} /> Processing...</> : <><FaCheck style={{ marginRight: '0.25rem' }} /> Mark as Paid</>}
+                        </button>
+                      ) : null;
+                    })()} */}
+                    
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        onClick={() => {
+                          sessionStorage.setItem('orderToEdit', JSON.stringify({
+                            id: order.id,
+                            orderType: 'delivery',
+                            offline: order.offline || false,
+                            offlineId: order.offlineId || null
+                          }));
+                          navigate(`${basePath}/orders`);
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '0.75rem',
+                          border: '2px solid #007bff',
+                          borderRadius: '8px',
+                          background: 'white',
+                          color: '#007bff',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          fontSize: '0.9rem'
+                        }}
+                      >
+                        <FaEdit style={{ marginRight: '0.25rem' }} /> Edit Order
+                      </button>
+                      <button
+                        onClick={() => handleCancelOrder(order.id)}
+                        disabled={cancellingOrderId === order.id || order.offline}
+                        style={{
+                          flex: 1,
+                          padding: '0.75rem',
+                          border: '2px solid #dc3545',
+                          borderRadius: '8px',
+                          background: order.offline ? '#f8f9fa' : 'white',
+                          color: order.offline ? '#adb5bd' : '#dc3545',
+                          fontWeight: 'bold',
+                          cursor: (cancellingOrderId === order.id || order.offline) ? 'not-allowed' : 'pointer',
+                          fontSize: '0.9rem',
+                          opacity: (cancellingOrderId === order.id || order.offline) ? 0.6 : 1
+                        }}
+                      >
+                        {cancellingOrderId === order.id ? 'Processing...' : <><FaTimes style={{ marginRight: '0.25rem' }} /> Cancel</>}
+                      </button>
+                    </div>
                   </div>
 
-                  {order.payment_status === 'pending' && (
+                  {/* Mark as Paid Button - Commented out (conditional button that depended on payment_status) */}
+                  {/* {order.payment_status === 'pending' && (
                     <button
                       onClick={() => openPaymentModal(order)}
                       disabled={markingPaidId === order.id || order.offline}
@@ -1944,46 +2782,45 @@ const DeliveryOrders = () => {
                         opacity: (markingPaidId === order.id || order.offline) ? 0.6 : 1
                       }}
                     >
-                      {markingPaidId === order.id ? 'Processing...' : '💰 Mark as Paid'}
+                      {markingPaidId === order.id ? 'Processing...' : <><FaDollarSign style={{ marginRight: '0.25rem' }} /> Mark as Paid</>}
                     </button>
-                  )}
+                  )} */}
                 </div>
               )}
 
               {activeTab === 'completed' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {/* Order Status Dropdown for completed orders */}
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#495057', minWidth: '80px' }}>
-                      Status:
-                    </label>
-                    <select
-                      value={(() => {
-                        const dStatus = order.deliveryStatus || order.delivery_status || 'pending';
-                        // Return the actual delivery status if it's a valid option, otherwise default to pending
-                        const validStatuses = ['pending', 'preparing', 'out_for_delivery', 'delivered'];
-                        return validStatuses.includes(dStatus) ? dStatus : 'pending';
-                      })()}
-                      onChange={(e) => handleStatusUpdate(order.id, e.target.value)}
-                      disabled={updatingStatusId === order.id}
-                      style={{
-                        flex: 1,
-                        padding: '0.5rem',
-                        border: '2px solid #e2e8f0',
-                        borderRadius: '6px',
-                        background: 'white',
-                        color: '#495057',
-                        fontWeight: '600',
-                        cursor: updatingStatusId === order.id ? 'not-allowed' : 'pointer',
-                        fontSize: '0.85rem'
-                      }}
-                    >
-                      <option value="pending">⏳ Pending</option>
-                      <option value="preparing">👨‍🍳 Preparing</option>
-                      <option value="out_for_delivery">🚚 Out for Delivery</option>
-                      <option value="delivered">✅ Delivered</option>
-                    </select>
-                  </div>
+                  {/* Order Status - static (read-only) in Completed tab */}
+                  {(() => {
+                    const orderStatus = (order.orderStatus || order.order_status || '').toLowerCase();
+                    const dStatus = (order.deliveryStatus || order.delivery_status || 'delivered').toLowerCase();
+                    const displayStatus = orderStatus === 'cancelled' ? 'cancelled' : dStatus;
+                    const colors = orderStatus === 'cancelled'
+                      ? { background: '#f8d7da', color: '#721c24' }
+                      : getDeliveryStatusColor(displayStatus);
+                    return (
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '10px' }}>
+                        <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#495057', minWidth: '80px' }}>
+                          Status:
+                        </label>
+                        <div style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          padding: '0.25rem 0.75rem',
+                          borderRadius: '20px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          textTransform: 'capitalize',
+                          background: colors.background,
+                          color: colors.color
+                        }}>
+                          {orderStatus === 'cancelled' ? <FaTimes /> : displayStatus === 'delivered' ? <FaCheck /> : displayStatus === 'out_for_delivery' ? <FaTruck /> : <FaClock />}
+                          <span>{displayStatus.replace(/_/g, ' ')}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Payment Info */}
                   {order.payment_method && (
@@ -2007,7 +2844,7 @@ const DeliveryOrders = () => {
                   )}
 
                   {/* Revert Payment Button */}
-                  {order.payment_status === 'completed' && (
+                  {/* {order.payment_status === 'completed' && (
                     <button
                       onClick={() => handleRevertPayment(order.id)}
                       disabled={markingPaidId === order.id}
@@ -2024,16 +2861,15 @@ const DeliveryOrders = () => {
                         opacity: markingPaidId === order.id ? 0.6 : 1
                       }}
                     >
-                      {markingPaidId === order.id ? 'Processing...' : '↩️ Revert Payment'}
+                      {markingPaidId === order.id ? 'Processing...' : <><FaUndo style={{ marginRight: '0.25rem' }} /> Revert Payment</>}
                     </button>
-                  )}
+                  )} */}
                 </div>
               )}
             </div>
           ))}
         </div>
-      )
-      }
+      )}
 
       {/* Payment Modal */}
       {
@@ -2063,24 +2899,54 @@ const DeliveryOrders = () => {
                 Mark Order #{paymentModal.order.order_number || paymentModal.order.id} as Paid
               </h2>
 
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ marginBottom: '0.5rem', color: '#6c757d' }}>
+                  Order #{paymentModal.order.order_number || paymentModal.order.id}
+                </div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--color-primary)' }}>
+                  Total: {formatCurrency(paymentModal.order.totalAmount || paymentModal.order.total_amount)}
+                </div>
+              </div>
+
               <div style={{ marginBottom: '1rem' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', color: '#495057' }}>
                   Payment Method <span style={{ color: '#dc3545' }}>*</span>
                 </label>
-                <select
-                  value={paymentModal.paymentMethod}
-                  onChange={(e) => setPaymentModal({ ...paymentModal, paymentMethod: e.target.value, amountTaken: '' })}
-                  style={{
-                    width: '100%',
-                    padding: '0.75rem',
-                    border: '2px solid #dee2e6',
-                    borderRadius: '8px',
-                    fontSize: '1rem'
-                  }}
-                >
-                  <option value="cash">Cash</option>
-                  <option value="bank_transfer">Bank Transfer</option>
-                </select>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    onClick={() => {
+                      const orderTotal = paymentModal.order?.totalAmount || paymentModal.order?.total_amount || 0;
+                      setPaymentModal({ ...paymentModal, paymentMethod: 'cash', amountTaken: orderTotal.toString() });
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '0.75rem',
+                      border: paymentModal.paymentMethod === 'cash' ? '2px solid #28a745' : '2px solid #dee2e6',
+                      borderRadius: '8px',
+                      background: paymentModal.paymentMethod === 'cash' ? '#28a745' : 'white',
+                      color: paymentModal.paymentMethod === 'cash' ? 'white' : '#495057',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <FaMoneyBillWave style={{ marginRight: '0.25rem' }} /> Cash
+                  </button>
+                  <button
+                    onClick={() => setPaymentModal({ ...paymentModal, paymentMethod: 'bank_transfer', amountTaken: '' })}
+                    style={{
+                      flex: 1,
+                      padding: '0.75rem',
+                      border: paymentModal.paymentMethod === 'bank_transfer' ? '2px solid #007bff' : '2px solid #dee2e6',
+                      borderRadius: '8px',
+                      background: paymentModal.paymentMethod === 'bank_transfer' ? '#007bff' : 'white',
+                      color: paymentModal.paymentMethod === 'bank_transfer' ? 'white' : '#495057',
+                      fontWeight: 'bold',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <FaUniversity style={{ marginRight: '0.25rem' }} /> Bank Transfer
+                  </button>
+                </div>
               </div>
 
               {paymentModal.paymentMethod === 'cash' && (
@@ -2090,11 +2956,11 @@ const DeliveryOrders = () => {
                   </label>
                   <input
                     type="number"
-                    min={paymentModal.order.total_amount}
+                    min={paymentModal.order.totalAmount || paymentModal.order.total_amount}
                     step="0.01"
                     value={paymentModal.amountTaken}
                     onChange={(e) => setPaymentModal({ ...paymentModal, amountTaken: e.target.value })}
-                    placeholder={`Minimum: ${formatCurrency(paymentModal.order.total_amount)}`}
+                    placeholder={`Enter amount...`}
                     style={{
                       width: '100%',
                       padding: '0.75rem',
@@ -2103,9 +2969,9 @@ const DeliveryOrders = () => {
                       fontSize: '1rem'
                     }}
                   />
-                  {paymentModal.amountTaken && parseFloat(paymentModal.amountTaken) >= parseFloat(paymentModal.order.total_amount) && (
+                  {paymentModal.amountTaken && parseFloat(paymentModal.amountTaken) >= parseFloat(paymentModal.order.totalAmount || paymentModal.order.total_amount) && (
                     <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: '#d4edda', borderRadius: '6px', color: '#155724', fontSize: '0.9rem' }}>
-                      Return Amount: {formatCurrency(parseFloat(paymentModal.amountTaken) - parseFloat(paymentModal.order.total_amount))}
+                      Return Amount: {formatCurrency(parseFloat(paymentModal.amountTaken) - parseFloat(paymentModal.order.totalAmount || paymentModal.order.total_amount))}
                     </div>
                   )}
                 </div>
@@ -2131,7 +2997,7 @@ const DeliveryOrders = () => {
                   onClick={handleMarkAsPaid}
                   disabled={
                     !paymentModal.paymentMethod ||
-                    (paymentModal.paymentMethod === 'cash' && (!paymentModal.amountTaken || parseFloat(paymentModal.amountTaken) < parseFloat(paymentModal.order.total_amount)))
+                    (paymentModal.paymentMethod === 'cash' && (!paymentModal.amountTaken || parseFloat(paymentModal.amountTaken) < parseFloat(paymentModal.order.totalAmount || paymentModal.order.total_amount)))
                   }
                   style={{
                     flex: 1,
@@ -2144,7 +3010,7 @@ const DeliveryOrders = () => {
                     cursor: 'pointer',
                     opacity: (
                       !paymentModal.paymentMethod ||
-                      (paymentModal.paymentMethod === 'cash' && (!paymentModal.amountTaken || parseFloat(paymentModal.amountTaken) < parseFloat(paymentModal.order.total_amount)))
+                      (paymentModal.paymentMethod === 'cash' && (!paymentModal.amountTaken || parseFloat(paymentModal.amountTaken) < parseFloat(paymentModal.order.totalAmount || paymentModal.order.total_amount)))
                     ) ? 0.5 : 1
                   }}
                 >
@@ -2170,4 +3036,3 @@ const DeliveryOrders = () => {
 };
 
 export default DeliveryOrders;
-
