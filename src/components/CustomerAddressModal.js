@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import ConfirmationModal from './ConfirmationModal';
+import { Spinner } from './LoadingSkeleton';
 import {
   useCustomerAddressesQuery,
   useCreateCustomerAddressMutation,
@@ -381,7 +382,19 @@ const CustomerAddressModal = ({ isOpen, onClose, customer, onAddressUpdate }) =>
             </div>
           ) : loading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: '#6c757d' }}>
-              Loading addresses...
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '0.75rem 1rem',
+                borderRadius: '12px',
+                background: '#e7f5ff',
+                color: '#0b7285',
+                fontWeight: 600
+              }}>
+                <Spinner size="sm" />
+                <div>Loading addresses...</div>
+              </div>
             </div>
           ) : (
             <>

@@ -700,9 +700,6 @@ const DineInOrders = ({ basePath = '/manager' }) => {
   useEffect(() => {
     // Prevent double loading in React StrictMode
     if (loadAttemptedRef.current) {
-      // If we're skipping due to StrictMode remount, ensure loading is cleared
-      setLoading(false);
-      isLoadingRef.current = false;
       return;
     }
     
@@ -785,11 +782,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
         // Force refetch with latest values - refs are already updated above
         // Call fetchStats FIRST to ensure it uses the latest refs
         await fetchStats();
-        
-        // CRITICAL: Call fetchAllOrders with showLoading=false to avoid the loading check skip
-        // We already set isLoadingRef above, so we don't want to set it again
-        isLoadingRef.current = false; // Reset first so fetchAllOrders can proceed
-        await fetchAllOrders(false); // Pass false to avoid setting loading state again
+        await fetchAllOrders(true);
       } catch (error) {
         // Silently handle errors
       } finally {
@@ -837,7 +830,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
             if (!isLoadingRef.current) {
               isLoadingRef.current = true;
               await Promise.all([
-                fetchAllOrders(false), // Don't show loading state
+                fetchAllOrders(true),
                 fetchStats()
               ]);
               isLoadingRef.current = false;
@@ -850,7 +843,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
             if (!isLoadingRef.current) {
               isLoadingRef.current = true;
               await Promise.all([
-                fetchAllOrders(false),
+                fetchAllOrders(true),
                 fetchStats()
               ]);
               isLoadingRef.current = false;
@@ -862,7 +855,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
             isLoadingRef.current = true;
             try {
               await Promise.all([
-                fetchAllOrders(false),
+                fetchAllOrders(true),
                 fetchStats()
               ]);
             } finally {
@@ -1252,7 +1245,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
       console.log('💰 [DineInOrders] Mark as Paid - Refetching stats and orders...');
       await Promise.all([
         fetchStats(),
-        fetchAllOrders(false) // Refresh orders without showing loading state
+        fetchAllOrders(true)
       ]);
       console.log('💰 [DineInOrders] Mark as Paid - Stats and orders refreshed');
       
@@ -1521,7 +1514,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
         } catch (err) {
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to cancel order');
           // Revert local state on error
-          await fetchAllOrders(false);
+          await fetchAllOrders(true);
         } finally {
           setCancellingOrderId(null);
         }
@@ -1571,7 +1564,7 @@ const DineInOrders = ({ basePath = '/manager' }) => {
         } catch (err) {
           showError(err.formattedMessage || err.response?.data?.error || 'Failed to revert payment status');
           // Revert local state on error
-          await fetchAllOrders(false);
+          await fetchAllOrders(true);
         } finally {
           setMarkingPaidId(null);
         }

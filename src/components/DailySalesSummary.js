@@ -1286,10 +1286,12 @@ const DailySalesSummary = () => {
                         })()
                       }}>
                         {(() => {
-                          const isCancelled = orderStatus === 'cancelled' || paymentStatus === 'cancelled';
+                          const isPaymentCancelled = paymentStatus === 'cancelled';
+                          const isOrderCancelled = orderStatus === 'cancelled';
+                          const isCancelled = isOrderCancelled || isPaymentCancelled;
                           const isPaid = paymentStatus === 'completed';
                           if (isCancelled) {
-                            return 'Cancelled';
+                            return isPaymentCancelled ? 'Payment Cancelled' : 'Cancelled';
                           }
                           return isPaid ? 'Paid' : 'Pending';
                         })()}

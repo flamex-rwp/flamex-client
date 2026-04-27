@@ -19,6 +19,7 @@ import {
   useCreateCustomerAddressMutation,
 } from '../hooks';
 import { customerKeys } from '../lib/queryKeys';
+import ScreenLoading from './ScreenLoading';
 
 const CustomerManagement = () => {
   const { showSuccess, showError } = useToast();
@@ -280,9 +281,7 @@ const CustomerManagement = () => {
           Failed to load customers: {listError}
         </div>
       ) : initializingList && customers.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '3rem' }}>
-          <div style={{ fontSize: '1.2rem', color: '#6c757d' }}>Loading customers...</div>
-        </div>
+        <ScreenLoading label="Loading customers..." />
       ) : customers.length === 0 ? (
         <div style={{
           background: 'white',

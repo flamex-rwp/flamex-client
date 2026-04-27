@@ -1,21 +1,30 @@
 import React from 'react';
 import { Spinner } from './LoadingSkeleton';
 
-const containerStyle = {
-  textAlign: 'center',
-  padding: '3rem',
-  color: '#6c757d',
+const outerStyle = {
+  padding: '2rem',
   display: 'flex',
-  flexDirection: 'column',
+  justifyContent: 'center',
+};
+
+const boxStyle = {
+  padding: '0.9rem 1.25rem',
+  borderRadius: '12px',
+  background: 'transparent',
+  color: 'black',
+  fontWeight: 600,
+  display: 'inline-flex',
   alignItems: 'center',
-  gap: '1rem',
+  gap: '0.75rem',
 };
 
 export default function ScreenLoading({ label = 'Loading...' }) {
   return (
-    <div style={containerStyle}>
-      <Spinner size="lg" />
-      <div>{label}</div>
+    <div style={outerStyle}>
+      <div style={boxStyle} aria-busy="true">
+        <Spinner size="sm" />
+        <div>{label}</div>
+      </div>
     </div>
   );
 }

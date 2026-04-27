@@ -1254,10 +1254,26 @@ const AdminPortal = ({ user, onLogout }) => {
                   {(Array.isArray(users) ? users : []).map(user => (
                     <tr key={user.id}>
                       <td>{user.id}</td>
-                      <td>{user.username}</td>
-                      <td>{user.fullName || user.full_name || user.username}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 180 }} title={user.username}>
+                          {user.username}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className="cell-truncate"
+                          style={{ maxWidth: 220 }}
+                          title={user.fullName || user.full_name || user.username}
+                        >
+                          {user.fullName || user.full_name || user.username}
+                        </span>
+                      </td>
                       <td><span className={`role-badge ${user.role}`}>{user.role}</span></td>
-                      <td>{user.email}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 240 }} title={user.email || ''}>
+                          {user.email}
+                        </span>
+                      </td>
                       <td>{(user.monthlySalary ?? user.monthly_salary) ? `PKR ${Number(user.monthlySalary ?? user.monthly_salary).toLocaleString()}` : '—'}</td>
                       <td><span className={`status-badge ${user.status}`}>{user.status}</span></td>
                       <td>
@@ -1372,8 +1388,16 @@ const AdminPortal = ({ user, onLogout }) => {
                     displayedCategories.map(cat => (
                       <tr key={cat.id}>
                         <td>{cat.id}</td>
-                        <td>{cat.name}</td>
-                        <td>{cat.description}</td>
+                        <td>
+                          <span className="cell-truncate" style={{ maxWidth: 240 }} title={cat.name || ''}>
+                            {cat.name}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="cell-truncate" style={{ maxWidth: 360 }} title={cat.description || ''}>
+                            {cat.description}
+                          </span>
+                        </td>
                         <td>
                           <button className="btn-edit" onClick={() => {
                             setEditingCategory(cat);
@@ -1488,8 +1512,20 @@ const AdminPortal = ({ user, onLogout }) => {
                           <span style={{ color: '#6c757d', fontSize: '1.5rem' }}>📷</span>
                         )}
                       </td>
-                      <td>{item.name}</td>
-                      <td>{item.category?.name || item.category_name || 'N/A'}</td>
+                      <td>
+                        <span className="cell-truncate" style={{ maxWidth: 260 }} title={item.name || ''}>
+                          {item.name}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className="cell-truncate"
+                          style={{ maxWidth: 220 }}
+                          title={item.category?.name || item.category_name || 'N/A'}
+                        >
+                          {item.category?.name || item.category_name || 'N/A'}
+                        </span>
+                      </td>
                       <td>PKR {parseFloat(item.price).toFixed(2)}</td>
                       <td>
                         {item.productPrice != null && item.productPrice !== ''

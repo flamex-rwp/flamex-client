@@ -1998,11 +1998,14 @@ const OrderHistory = () => {
                       })()
                     }}>
                       {(() => {
-                        const isCancelled = (order.order_status || order.orderStatus) === 'cancelled' ||
-                          (order.payment_status || order.paymentStatus) === 'cancelled';
+                        const orderStatus = (order.order_status || order.orderStatus);
+                        const paymentStatus = (order.payment_status || order.paymentStatus);
+                        const isPaymentCancelled = paymentStatus === 'cancelled';
+                        const isOrderCancelled = orderStatus === 'cancelled';
+                        const isCancelled = isOrderCancelled || isPaymentCancelled;
                         const isPaid = (order.payment_status || order.paymentStatus) === 'completed';
                         if (isCancelled) {
-                          return 'Cancelled';
+                          return isPaymentCancelled ? 'Payment Cancelled' : 'Cancelled';
                         }
                         return isPaid ? 'Paid' : 'Pending Payment';
                       })()}

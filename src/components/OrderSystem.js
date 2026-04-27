@@ -2931,9 +2931,13 @@ const OrderSystem = ({ basePath = '/manager' }) => {
                   background: '#e7f5ff',
                   color: '#0b7285',
                   fontWeight: 600,
-                  fontSize: '0.9rem'
+                  fontSize: '0.9rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem'
                 }}>
-                  Loading order details...
+                  <Spinner size="sm" />
+                  <div>Loading order details...</div>
                 </div>
               )}
               {editingOrder && !editLoading && (

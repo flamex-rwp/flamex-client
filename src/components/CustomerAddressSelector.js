@@ -3,6 +3,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useOffline } from '../contexts/OfflineContext';
 import { isOnline } from '../utils/offlineSync';
 import { useCustomerAddressesQuery, useCreateCustomerAddressMutation } from '../hooks';
+import { Spinner } from './LoadingSkeleton';
 
 const CustomerAddressSelector = ({
   customer,
@@ -245,7 +246,19 @@ const CustomerAddressSelector = ({
         </div>
       ) : loading ? (
         <div style={{ padding: '1rem', textAlign: 'center', color: '#6c757d' }}>
-          Loading addresses...
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.6rem',
+            padding: '0.6rem 0.85rem',
+            borderRadius: '10px',
+            background: '#e7f5ff',
+            color: '#0b7285',
+            fontWeight: 600
+          }}>
+            <Spinner size="sm" />
+            <div>Loading addresses...</div>
+          </div>
         </div>
       ) : (
         <>
