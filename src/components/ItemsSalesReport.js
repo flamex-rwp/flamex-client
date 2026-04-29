@@ -370,8 +370,8 @@ const ItemsSalesReport = () => {
       doc.setFont('helvetica', 'normal');
       doc.text('Easypaisa: 03307072222', pageWidth / 2, yPosition, { align: 'center' });
       yPosition += lineHeight;
-      doc.text('Abdullah Saleem', pageWidth / 2, yPosition, { align: 'center' });
-      yPosition += lineHeight;
+      // doc.text('Abdullah Saleem', pageWidth / 2, yPosition, { align: 'center' });
+      // yPosition += lineHeight;
       doc.setFont('helvetica', 'bold');
       doc.text('THANK YOU!', pageWidth / 2, yPosition, { align: 'center' });
 

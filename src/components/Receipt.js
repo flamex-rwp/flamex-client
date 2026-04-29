@@ -740,8 +740,6 @@ const generateHTMLReceipt = (orderData, printStage) => {
           └─────────────────────────────┘</div>
         <div class="center-text" style="font-size: 14px !important;">${isDelivery ? 'We hope to serve you again !' : 'COME AGAIN SOON!'}</div>
         <div class="center-text">0330-7072222</div>
-        <div class="center-text">Abdullah Saleem</div>
-        
         <!-- CUT LINE -->
         <div class="spacer"></div>
         <div class="center-text">══════════════════════════════</div>
@@ -1665,7 +1663,7 @@ const Receipt = ({ orderData, printStage }) => {
         <div style={{ ...centerTextStyle, fontSize: '14px', marginBottom: '2px' }}>꧁𓊈𒆜 THANK YOU 𒆜𓊉꧂</div>
         <div style={{ ...centerTextStyle, fontSize: '14px' }}>{isDelivery ? 'Thank You! we hope to serve you again' : 'COME AGAIN SOON!'}</div>
         <div style={centerTextStyle}>0330-7072222</div>
-        <div style={centerTextStyle}>Abdullah Saleem</div>
+        {/* <div style={centerTextStyle}>Abdullah Saleem</div> */}
 
         {/* CUT LINE */}
         <div style={{ height: '2px' }}></div>
