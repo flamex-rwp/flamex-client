@@ -15,7 +15,7 @@ const boxStyle = {
   fontWeight: 600,
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '0.75rem',
+  gap: '0.75rem', 
 };
 
 export default function ScreenLoading({ label = 'Loading...' }) {

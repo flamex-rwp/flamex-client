@@ -215,13 +215,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
     } catch (e) {}
   }, [getCartStorageKey]);
 
-  const computeNextCartId = useCallback((cartsArr) => {
-    const maxId = (Array.isArray(cartsArr) ? cartsArr : [])
-      .map(c => Number(c?.id) || 0)
-      .reduce((acc, id) => Math.max(acc, id), 0);
-    return Math.max(1, maxId + 1);
-  }, []);
-
   // Persist carts to sessionStorage (session-only, per user)
   useEffect(() => {
     const key = getCartStorageKey();
@@ -478,7 +471,7 @@ const OrderSystem = ({ basePath = '/manager' }) => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [isDelivery]);
+  }, [isDelivery, getLocalDateKey]);
 
   // Also update occupied tables when orders change (for offline mode)
   useEffect(() => {
@@ -617,10 +610,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
       )
     );
   }, [activeCartId]);
-
-  const setCart = (newCart) => {
-    updateActiveCart({ items: newCart });
-  };
 
   const setSpecialInstructions = (instructions) => {
     updateActiveCart({ specialInstructions: instructions });
@@ -1161,52 +1150,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
     inFlight: false,
   });
 
-  const autoEnsureDeliveryCustomer = useCallback(async () => {
-    // Only auto-create when user is manually typing (no selected customer yet)
-    if (selectedCustomer && selectedCustomer.id) return;
-
-    const nameRaw = typeof deliveryName === 'string' ? deliveryName : '';
-    const phoneRaw = typeof deliveryPhone === 'string' ? deliveryPhone : '';
-    const addressRaw = typeof deliveryAddress === 'string' ? deliveryAddress : '';
-
-    const name = nameRaw.trim();
-    const phone = phoneRaw.trim();
-    const address = normalizeCustomerAddress(addressRaw);
-
-    if (!name || !phone || !address) return;
-    if (!phoneIsValid(phone)) return;
-
-    const key = `${normalizeCustomerName(name)}|${normalizeCustomerPhone(phone)}|${address}`;
-    if (autoCreateCustomerRef.current.inFlight) return;
-    if (autoCreateCustomerRef.current.lastKey === key) return;
-
-    autoCreateCustomerRef.current.inFlight = true;
-    try {
-      // Create or locate customer using existing checkout helper (will be updated to name+phone matching)
-      const customerId = await ensureDeliveryCustomer();
-      if (!customerId) return;
-
-      // Load full customer and set it as selected so addresses & updates work immediately
-      try {
-        const res = await customerAPI.getById(customerId);
-        const fullCustomer = res.data?.data || res.data;
-        if (fullCustomer) {
-          setSelectedCustomer(fullCustomer);
-        } else {
-          setSelectedCustomer({ id: customerId, name, phone, address });
-        }
-      } catch (err) {
-        setSelectedCustomer({ id: customerId, name, phone, address });
-      }
-
-      autoCreateCustomerRef.current.lastKey = key;
-    } catch (err) {
-      // Silent: user can still place order and ensureDeliveryCustomer will run again
-    } finally {
-      autoCreateCustomerRef.current.inFlight = false;
-    }
-  }, [selectedCustomer, deliveryName, deliveryPhone, deliveryAddress]);
-
   const ensureDeliveryCustomer = async () => {
     const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -1393,6 +1336,52 @@ const OrderSystem = ({ basePath = '/manager' }) => {
       throw new Error(errorMsg || 'Unable to process customer information');
     }
   };
+
+  const autoEnsureDeliveryCustomer = useCallback(async () => {
+    // Only auto-create when user is manually typing (no selected customer yet)
+    if (selectedCustomer && selectedCustomer.id) return;
+
+    const nameRaw = typeof deliveryName === 'string' ? deliveryName : '';
+    const phoneRaw = typeof deliveryPhone === 'string' ? deliveryPhone : '';
+    const addressRaw = typeof deliveryAddress === 'string' ? deliveryAddress : '';
+
+    const name = nameRaw.trim();
+    const phone = phoneRaw.trim();
+    const address = normalizeCustomerAddress(addressRaw);
+
+    if (!name || !phone || !address) return;
+    if (!phoneIsValid(phone)) return;
+
+    const key = `${normalizeCustomerName(name)}|${normalizeCustomerPhone(phone)}|${address}`;
+    if (autoCreateCustomerRef.current.inFlight) return;
+    if (autoCreateCustomerRef.current.lastKey === key) return;
+
+    autoCreateCustomerRef.current.inFlight = true;
+    try {
+      // Create or locate customer using existing checkout helper (will be updated to name+phone matching)
+      const customerId = await ensureDeliveryCustomer();
+      if (!customerId) return;
+
+      // Load full customer and set it as selected so addresses & updates work immediately
+      try {
+        const res = await customerAPI.getById(customerId);
+        const fullCustomer = res.data?.data || res.data;
+        if (fullCustomer) {
+          setSelectedCustomer(fullCustomer);
+        } else {
+          setSelectedCustomer({ id: customerId, name, phone, address });
+        }
+      } catch (err) {
+        setSelectedCustomer({ id: customerId, name, phone, address });
+      }
+
+      autoCreateCustomerRef.current.lastKey = key;
+    } catch (err) {
+      // Silent: user can still place order and ensureDeliveryCustomer will run again
+    } finally {
+      autoCreateCustomerRef.current.inFlight = false;
+    }
+  }, [selectedCustomer, deliveryName, deliveryPhone, deliveryAddress, ensureDeliveryCustomer]);
 
   const loadOrderForEditing = useCallback(async (orderMeta) => {
     if (!orderMeta?.id) return;
@@ -1672,12 +1661,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
     return cart.reduce((total, item) => total + (parseFloat(item.price) || 0) * (item.quantity || 0), 0);
   }, [cart]);
 
-  const getReturnAmount = useCallback(() => {
-    const total = getTotal();
-    const taken = parseFloat(amountTaken) || 0;
-    return Math.max(0, taken - total);
-  }, [getTotal, amountTaken]);
-
   const handleCheckout = async () => {
     if (cart.length === 0) {
       setCheckoutError('Cart is empty. Add items before checking out.');
@@ -1741,7 +1724,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
     try {
       const subtotal = subtotalAmount; // Use memoized value
       const deliveryChargeValue = deliveryFee; // Use memoized value
-      const discount = discountAmount; // Use memoized value
       const totalAmount = grandTotalAmount; // Use memoized value
 
       // Determine payment details based on order type and payment type
@@ -2495,7 +2477,6 @@ const OrderSystem = ({ basePath = '/manager' }) => {
                         }}
                         onError={(e) => {
                           e.target.style.display = 'none';
-                          const emoji = (item.name?.trim()?.charAt(0)) || '';
                           e.target.parentElement.innerHTML = `
                   <div style="
                     width: 100%;

@@ -460,13 +460,6 @@ export const printReceipt = (orderData, printStage) => {
 
     w.document.close();
 
-    // Store iframe reference for cleanup
-    const cleanupIframe = () => {
-      if (iframe && iframe.parentNode) {
-        iframe.parentNode.removeChild(iframe);
-      }
-    };
-
     // Guard flag to prevent multiple resolve calls
     let hasResolved = false;
 
@@ -747,8 +740,6 @@ const generateHTMLReceipt = (orderData, printStage) => {
           └─────────────────────────────┘</div>
         <div class="center-text" style="font-size: 14px !important;">${isDelivery ? 'We hope to serve you again !' : 'COME AGAIN SOON!'}</div>
         <div class="center-text">0330-7072222</div>
-        <div class="center-text">Abdullah Saleem</div>
-        
         <!-- CUT LINE -->
         <div class="spacer"></div>
         <div class="center-text">══════════════════════════════</div>
@@ -1243,13 +1234,6 @@ export const printCombinedReceipt = (orderData) => {
     w.document.write(combinedHTML);
     w.document.close();
 
-    // Store iframe reference for cleanup
-    const cleanupIframe = () => {
-      if (iframe && iframe.parentNode) {
-        iframe.parentNode.removeChild(iframe);
-      }
-    };
-
     // Guard flag to prevent multiple resolve calls
     let hasResolved = false;
 
@@ -1394,12 +1378,6 @@ const Receipt = ({ orderData, printStage }) => {
     boxSizing: 'border-box',
     color: '#000000'
   };
-  
-  // First header style - no top margin
-  const firstHeaderStyle = {
-    ...headerStyle,
-    marginTop: '0',
-  };
 
   const centerTextStyle = {
     textAlign: 'center',
@@ -1411,14 +1389,6 @@ const Receipt = ({ orderData, printStage }) => {
     wordWrap: 'break-word',
     overflowWrap: 'break-word',
     color: '#000000'
-  };
-
-  const hrStyle = {
-    border: 'none',
-    borderTop: '0.5px solid #000',
-    margin: '5px 0',
-    width: '100%',
-    boxSizing: 'border-box'
   };
 
   const asciiArtStyle = {
@@ -1693,7 +1663,7 @@ const Receipt = ({ orderData, printStage }) => {
         <div style={{ ...centerTextStyle, fontSize: '14px', marginBottom: '2px' }}>꧁𓊈𒆜 THANK YOU 𒆜𓊉꧂</div>
         <div style={{ ...centerTextStyle, fontSize: '14px' }}>{isDelivery ? 'Thank You! we hope to serve you again' : 'COME AGAIN SOON!'}</div>
         <div style={centerTextStyle}>0330-7072222</div>
-        <div style={centerTextStyle}>Abdullah Saleem</div>
+        {/* <div style={centerTextStyle}>Abdullah Saleem</div> */}
 
         {/* CUT LINE */}
         <div style={{ height: '2px' }}></div>
